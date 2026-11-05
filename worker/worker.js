@@ -37,6 +37,11 @@ async function cloudPrices(request, env, headers) {
   }
   // Name-based results require manual UPC/presentation verification by the merchant.
   if(!rows.length&&name)rows=await call(name);
+  // Reject clearly different brands, sizes and multipacks when a reliable product name exists.
+  const sizes=text=>{const found=[];const rx=/(\d+(?:[.,]\d+)?)\s*(fl\s*oz|oz|ml|milliliters?|l|liters?|g|grams?|kg|ct|count|pcs|pieces?|pk|pack)\b/gi;let m;while((m=rx.exec(text))){let unit=m[2].toLowerCase().replace(/\s+/g,"");unit=/^(ct|count|pcs|piece|pieces|pk|pack)$/.test(unit)?"count":/^fl?oz$/.test(unit)?"oz":unit.startsWith("liter")?"l":unit.startsWith("milliliter")?"ml":unit.startsWith("gram")?"g":unit;found.push([Number(m[1].replace(",",".")),unit])}return found};
+  const multiPack=text=>/(\bpack\s+of\s+[2-9]\d*\b|\b[2-9]\d*\s*(?:pack|pk|case|carton)\b|\b[2-9]\d*\s*[x×]\s*\d+)/i.test(text);
+  const tokens=text=>{const stop=new Set(["the","and","with","original","flavor","flavour","size","unit","single","pack","count","pcs","pieces","ounce","bottle","oz","ml","grams","each"]);return [...new Set(text.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g,"").split(/[^a-z0-9]+/).filter(t=>t.length>=3&&!/^\d+$/.test(t)&&!stop.has(t)))]};
+  const expectedSizes=sizes(name),expectedWords=tokens(name);
   const offers=[],seen=new Set();
   for(const r of rows){
    const price=Number(r.extracted_price),title=String(r.title||"").trim().slice(0,180);
@@ -46,6 +51,15 @@ async function cloudPrices(request, env, headers) {
    const rawPrice=String(r.price||"");
    if(/\/\s*(mo|month|week|yr|year)/i.test(rawPrice))continue;
    const exact=(title+" "+String(r.snippet||"")).includes(upc);
+   if(name&&!exact){
+    const gotSizes=sizes(title);
+    if(expectedSizes.length&&gotSizes.length&&!expectedSizes.some(x=>gotSizes.some(y=>x[0]===y[0]&&x[1]===y[1])))continue;
+    if(!multiPack(name)&&multiPack(title))continue;
+    if(expectedWords.length){
+     const words=new Set(tokens(title)),matches=expectedWords.filter(w=>words.has(w)).length;
+     if(matches<Math.max(1,Math.ceil(expectedWords.length*0.6)))continue;
+    }
+   }
    // Name-based results are candidates. Never mark unverified titles as exact UPC matches.
    const k=seller.toLowerCase()+"|"+title.toLowerCase()+"|"+price.toFixed(2);
    if(seen.has(k))continue;seen.add(k);
