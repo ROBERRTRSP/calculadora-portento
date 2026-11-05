@@ -3,7 +3,7 @@
 // Search results are candidate offers, NOT proof that the merchant sells the exact UPC.
 async function cloudPrices(request, env, headers) {
  const u=new URL(request.url),upc=(u.searchParams.get("upc")||"").trim();
- const name=(u.searchParams.get("name")||"").trim().slice(0,100);
+ let name=(u.searchParams.get("name")||"").trim().slice(0,100);
  const json=(body,status=200,cache=false)=>new Response(JSON.stringify(body),{status,headers:{...headers,"Cache-Control":cache?"public, max-age=86400":"no-store"}});
  if(!/^\d{8,14}$/.test(upc))return json({error:"Código UPC/EAN inválido"},400);
  if(!env.SERPAPI_API_KEY)return json({error:"Falta configurar SERPAPI_API_KEY en Cloudflare. La búsqueda web comercial todavía no está activada.",setup_required:true},503);
@@ -20,7 +20,22 @@ async function cloudPrices(request, env, headers) {
  };
  try{
   let rows=await call(upc);
-  // A second, name-based search is used only when the exact-code search returns nothing.
+  // On failed UPC search, resolve its catalog name before a second commercial query.
+  if(!rows.length&&!name){
+   for(const host of ["world.openfoodfacts.org","world.openproductsfacts.org","world.openbeautyfacts.org"]){
+    const c=new AbortController(),limit=setTimeout(()=>c.abort(),3000);
+    try{const productUrl="https://"+host+"/api/v2/product/"+encodeURIComponent(upc)+".json?fields=product_name,brands,quantity";
+      const pr=await fetch(productUrl,{signal:c.signal,headers:{Accept:"application/json"}});
+      if(!pr.ok)continue;
+      const pd=await pr.json(),product=pd.product||{};
+      if(pd.status===1&&String(product.product_name||"").trim()){
+       name=[product.brands,product.product_name,product.quantity].filter(Boolean).join(" ").slice(0,100);
+       break;
+      }
+    }catch(e){}finally{clearTimeout(limit)}
+   }
+  }
+  // Name-based results require manual UPC/presentation verification by the merchant.
   if(!rows.length&&name)rows=await call(name);
   const offers=[],seen=new Set();
   for(const r of rows){
