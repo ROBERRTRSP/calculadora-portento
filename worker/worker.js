@@ -1,3 +1,48 @@
+
+// GET /prices?upc=...&name=... — cloud shopping lookup. Requires SERPAPI_API_KEY secret.
+// Search results are candidate offers, NOT proof that the merchant sells the exact UPC.
+async function cloudPrices(request, env, headers) {
+ const u=new URL(request.url),upc=(u.searchParams.get("upc")||"").trim();
+ const name=(u.searchParams.get("name")||"").trim().slice(0,100);
+ const json=(body,status=200,cache=false)=>new Response(JSON.stringify(body),{status,headers:{...headers,"Cache-Control":cache?"public, max-age=86400":"no-store"}});
+ if(!/^\d{8,14}$/.test(upc))return json({error:"Código UPC/EAN inválido"},400);
+ if(!env.SERPAPI_API_KEY)return json({error:"Falta configurar SERPAPI_API_KEY en Cloudflare. La búsqueda web comercial todavía no está activada.",setup_required:true},503);
+ const normalized=new URL(request.url);normalized.search="";normalized.searchParams.set("upc",upc);if(name)normalized.searchParams.set("name",name);
+ const cacheKey=new Request(normalized.toString(),{method:"GET"});
+ const cache=typeof caches!=="undefined"?caches.default:null;
+ if(cache){try{const hit=await cache.match(cacheKey);if(hit)return hit}catch{}}
+ const call=async(q)=>{
+  const p=new URLSearchParams({engine:"google_shopping",q,gl:"us",hl:"en",location:"Paterson, New Jersey, United States",api_key:env.SERPAPI_API_KEY});
+  const ctrl=new AbortController(),timeout=setTimeout(()=>ctrl.abort(),12000);
+  try{const res=await fetch("https://serpapi.com/search.json?"+p.toString(),{signal:ctrl.signal,headers:{Accept:"application/json"}});const data=await res.json();if(!res.ok||data.error)throw Error(data.error||"No se pudo consultar Google Shopping");
+   return Array.isArray(data.shopping_results)?data.shopping_results:[]
+  }finally{clearTimeout(timeout)}
+ };
+ try{
+  let rows=await call(upc);
+  // A second, name-based search is used only when the exact-code search returns nothing.
+  if(!rows.length&&name)rows=await call(name);
+  const offers=[],seen=new Set();
+  for(const r of rows){
+   const price=Number(r.extracted_price),title=String(r.title||"").trim().slice(0,180);
+   const seller=String(r.source||"Vendedor sin identificar").trim().slice(0,100);
+   const link=String(r.product_link||"");
+   if(!Number.isFinite(price)||price<=0||price>100000||!title||!/^https:\/\/[^\s]+$/i.test(link)||r.installment||r.second_hand_condition)continue;
+   const rawPrice=String(r.price||"");
+   if(/\/\s*(mo|month|week|yr|year)/i.test(rawPrice))continue;
+   const exact=(title+" "+String(r.snippet||"")).includes(upc);
+   // Name-based results are candidates. Never mark unverified titles as exact UPC matches.
+   const k=seller.toLowerCase()+"|"+title.toLowerCase()+"|"+price.toFixed(2);
+   if(seen.has(k))continue;seen.add(k);
+   offers.push({title,seller,price:Math.round(price*100)/100,url:link,exact_upc_in_listing:exact,match:exact?"UPC en anuncio":"Verificar UPC y tamaño",source:"Google Shopping"});
+  }
+  offers.sort((a,b)=>a.price-b.price);
+  const result=json({upc,offers:offers.slice(0,30),searched_at:new Date().toISOString(),provider:"Google Shopping / SerpApi",location:"Paterson, NJ (búsqueda orientativa)",warning:"Los precios pueden cambiar o incluir otros tamaños, paquetes y vendedores externos. Verifica UPC, presentación, impuestos, envío y disponibilidad antes de usar la comparación."},200,true);
+  if(cache)try{await cache.put(cacheKey,result.clone())}catch{}
+  return result;
+ }catch(err){return json({error:"La búsqueda comercial en la nube falló",detail:String(err.message||err).slice(0,180)},502)}
+}
+
 // Cloudflare Worker for Porcento. Set OPENAI_API_KEY as an encrypted secret.
 // Set ALLOWED_ORIGIN to https://roberrtrsp.github.io (optional).
 export default {
@@ -7,6 +52,7 @@ export default {
   const headers={"Access-Control-Allow-Origin":allowed,"Access-Control-Allow-Methods":"POST, OPTIONS","Access-Control-Allow-Headers":"Content-Type","Vary":"Origin","Content-Type":"application/json"};
   if(origin!==allowed) return new Response(JSON.stringify({error:"Origen no autorizado"}),{status:403,headers});
   if(request.method==="OPTIONS")return new Response(null,{headers});
+  if(new URL(request.url).pathname==="/prices"){if(request.method!=="GET")return new Response(JSON.stringify({error:"Usa GET /prices"}),{status:405,headers});return cloudPrices(request,env,headers)}
   if(request.method!=="POST")return new Response(JSON.stringify({error:"Método no permitido"}),{status:405,headers});
   if(!env.OPENAI_API_KEY)return new Response(JSON.stringify({error:"Falta configurar OPENAI_API_KEY en el servidor"}),{status:503,headers});
   const length=Number(request.headers.get("content-length")||0);
