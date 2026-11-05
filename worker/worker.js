@@ -12,7 +12,7 @@ async function cloudPrices(request, env, headers) {
  const cache=typeof caches!=="undefined"?caches.default:null;
  if(cache){try{const hit=await cache.match(cacheKey);if(hit)return hit}catch{}}
  const call=async(q)=>{
-  const p=new URLSearchParams({engine:"google_shopping",q,gl:"us",hl:"en",location:"Paterson, New Jersey, United States",api_key:env.SERPAPI_API_KEY});
+  const p=new URLSearchParams({engine:"google_shopping",q,gl:"us",hl:"en",location:"Paterson, New Jersey, United States",num:"30",api_key:env.SERPAPI_API_KEY});
   const ctrl=new AbortController(),timeout=setTimeout(()=>ctrl.abort(),12000);
   try{const res=await fetch("https://serpapi.com/search.json?"+p.toString(),{signal:ctrl.signal,headers:{Accept:"application/json"}});const data=await res.json();if(!res.ok||data.error)throw Error(data.error||"No se pudo consultar Google Shopping");
    return Array.isArray(data.shopping_results)?data.shopping_results:[]
@@ -49,7 +49,7 @@ export default {
  async fetch(request, env) {
   const origin=request.headers.get("Origin")||"";
   const allowed=env.ALLOWED_ORIGIN||"https://roberrtrsp.github.io";
-  const headers={"Access-Control-Allow-Origin":allowed,"Access-Control-Allow-Methods":"POST, OPTIONS","Access-Control-Allow-Headers":"Content-Type","Vary":"Origin","Content-Type":"application/json"};
+  const headers={"Access-Control-Allow-Origin":allowed,"Access-Control-Allow-Methods":"GET, POST, OPTIONS","Access-Control-Allow-Headers":"Content-Type","Vary":"Origin","Content-Type":"application/json"};
   if(origin!==allowed) return new Response(JSON.stringify({error:"Origen no autorizado"}),{status:403,headers});
   if(request.method==="OPTIONS")return new Response(null,{headers});
   if(new URL(request.url).pathname==="/prices"){if(request.method!=="GET")return new Response(JSON.stringify({error:"Usa GET /prices"}),{status:405,headers});return cloudPrices(request,env,headers)}
