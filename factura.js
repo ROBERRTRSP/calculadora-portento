@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  const money = '(-?\\$?\\s*(?:\\d{1,3}(?:,\\d{3})+\\.\\d{2}|\\d{1,7}[.,]\\d{2}))';
+  const money = '(-?(?:US\\$|USD\\s*\\$?|\\$)?\\s*(?:\\d{1,3}(?:,\\d{3})+\\.\\d{2}|\\d{1,7}[.,]\\d{2}))';
   const amount = value => {
     if (typeof value === 'number') return Number.isFinite(value) && value >= 0 ? value : null;
     if (typeof value !== 'string' || !/^\d+(?:[.,]\d+)?$/.test(value.trim())) return null;
@@ -19,7 +19,7 @@
   function moneyCents(value) {
     if (typeof value !== 'string' && typeof value !== 'number') return null;
     const text = String(value).trim();
-    const match = text.match(/^(-?)\$?\s*(\d{1,9}|\d{1,3}(?:,\d{3}){1,2})(?:([.,])(\d{1,2}))?$/);
+    const match = text.match(/^(-?)(?:US\$|USD\s*\$?|\$)?\s*(\d{1,9}|\d{1,3}(?:,\d{3}){1,2})(?:([.,])(\d{1,2}))?\s*(?:USD)?$/i);
     if (!match || (match[2].includes(',') && match[3] === ',')) return null;
     const magnitude = Number(match[2].replaceAll(',', '')) * 100 + Number((match[4] || '').padEnd(2, '0'));
     return match[1] === '-' ? -magnitude : magnitude;
@@ -38,7 +38,7 @@
     const computed = sum + adjustmentTotal;
     const subtotalDifference = subtotal === null ? null : subtotal - sum;
     const difference = total === null ? null : total - computed;
-    const verified = rows.length > 0 && pending === 0 && !totals.partial && !totals.conflictingTotal && !adjustments.includes(null)
+    const verified = rows.length > 0 && pending === 0 && !totals.partial && !totals.conflictingTotal && !totals.foreignCurrency && !adjustments.includes(null)
       && difference === 0 && (subtotalDifference === null || subtotalDifference === 0);
     return { sum, computed, difference, subtotalDifference, pending, verified };
   }
@@ -127,8 +127,8 @@
     const receiptPrice = new RegExp('^(\\d+)\\s*(cases?|cs(?:-\\d+)?|bx|box|bags?|bg|dz|pk(?:-\\d+)?|pack|each|ea)\\s*' + (format === 'aaa' ? '[@&©]' : '@') + '\\s*' + money + '(?:\\s+' + money + ')?[|\\s]*$', 'i');
     const dairyRow = new RegExp('^[^\\w]*([0-9]{3,6})[.,:;)]?\\s+(.*?)\\s+(\\d+)\\s+' + money + '$');
     const amountOnly = new RegExp('^' + money + '$');
-    const totalLabel = /^(inv[o0][i1l]c[e3]\s+total|total this inv[o0][i1l]c[e3]|total (?:de la )?factura|total neto|grand total|net total|sub\s*total(?:\s+de\s+productos)?|total)\b[\s:/~|]*(.*)$/i;
-    const adjustmentLabel = /^(sales tax|total tax|tax|impuesto(?:s)?|itbis|shipping(?: fee)?|freight|flete|env[ií]o|deposit(?: fee)?|dep[oó]sito|service fee|recargo|discount|descuento)\b\s*[:/]*\s*(.*)$/i;
+    const totalLabel = /^(inv[o0][i1l]c[e3]\s+total|total this inv[o0][i1l]c[e3]|total (?:de la )?factura|total neto|grand total|net total|total incl\.? (?:tax|vat)|total con (?:impuestos|iva)|total general|importe total|sub\s*total(?:\s+de\s+productos)?|total)\b[\s:/~|]*(.*)$/i;
+    const adjustmentLabel = /^(sales tax|total tax|tax|impuesto(?:s)?|itbis|vat|iva|gst|shipping(?: fee)?|freight|flete|env[ií]o|deposit(?: fee)?|dep[oó]sito|service fee|recargo|rounding|redondeo|discount|descuento)\b\s*[:/]*\s*(.*)$/i;
     const adjustments = [];
     let subtotal = null, total = null, genericTotal = null, itemCode = '';
     for (let index = 0; index < lines.length; index++) {
@@ -217,7 +217,9 @@
       if (!/^[-_\s]+$/.test(line)) recent.push(line);
       if (recent.length > 2) recent.shift();
     }
-    return normalize({ productos: products, subtotal_productos: subtotal, total_factura: total ?? genericTotal, ajustes: adjustments });
+    const result = normalize({ productos: products, subtotal_productos: subtotal, total_factura: total ?? genericTotal, ajustes: adjustments });
+    result.totals.foreignCurrency = /[€£¥]|\b(?:EUR|GBP|CAD|MXN|DOP|JPY|COP|BRL|PEN|ARS|CLP|AUD|CHF|CNY)\s*(?:\$\s*)?\d|\d[.,]\d{2}\s+(?:EUR|GBP|CAD|MXN|DOP|JPY|COP|BRL|PEN|ARS|CLP|AUD|CHF|CNY)\b|\b(?:RD|MX|CA|AU)\$/.test(text);
+    return result;
   }
 
   function parseRosasRow(line) {
@@ -234,6 +236,136 @@
       observacion: ambiguousQuantity ? 'Confirma la cantidad de cajas.' : '' };
   }
 
+  const columnNames = [
+    ['unitPrice', /^(?:unit\s+(?:price|cost)|price\s+each|precio\s+(?:por\s+unidad|unitario)|p\.?\s*u\.?)$/i],
+    ['description', /^(?:item\s+description|product\s+description|description|descripci[oó]n|producto[s]?|art[ií]culo[s]?|concepto|item\s+name)$/i],
+    ['quantity', /^(?:qty\.?|quantity|cantidad|cant\.?|pcs\.?|piezas|units|unidades)$/i],
+    ['amount', /^(?:line\s+total|line\s+amount|extended\s+(?:price|amount)|ext\.?\s+price|importe|amount|total|neto)$/i],
+    ['code', /^(?:sku|upc|ean|item\s*(?:no\.?|number|code)|c[oóé]digo|ref\.?)$/i],
+    ['measure', /^(?:uom|u\/m|u\.?m\.?|unit\s+of\s+measure|unidad)$/i],
+    ['lineDiscount', /^(?:discount|descuento)$/i],
+    ['other', /^(?:tax|impuesto|vat|iva|price|precio|cost|costo)$/i]
+  ];
+
+  function tsvWords(tsv) {
+    if (typeof tsv !== 'string') return [];
+    return tsv.split(/\r?\n/).slice(1).flatMap(line => {
+      const cells = line.split('\t');
+      if (cells[0] !== '5' || !cells[11]?.trim()) return [];
+      const [x, y, width, height] = cells.slice(6, 10).map(Number);
+      if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) return [];
+      return [{ text: cells[11].trim(), x, y, width, height }];
+    });
+  }
+
+  function visualRows(words) {
+    const center = word => word.y + word.height / 2;
+    const rows = [];
+    for (const word of [...words].sort((a, b) => center(a) - center(b) || a.x - b.x)) {
+      const row = rows.at(-1);
+      if (row && Math.abs(row.center - center(word)) < Math.max(row.height, word.height) * .48) row.words.push(word);
+      else rows.push({ center: center(word), height: word.height, words: [word] });
+    }
+    return rows.map(row => row.words.sort((a, b) => a.x - b.x));
+  }
+
+  function invoiceColumns(words) {
+    const columns = [];
+    for (let index = 0; index < words.length;) {
+      let matched = false;
+      for (let length = Math.min(3, words.length - index); length > 0; length--) {
+        const phrase = words.slice(index, index + length).map(word => word.text).join(' ').replace(/:$/, '');
+        const field = columnNames.find(([, label]) => label.test(phrase));
+        if (!field) continue;
+        const first = words[index], last = words[index + length - 1];
+        const center = (first.x + last.x + last.width) / 2;
+        columns.push({ name: field[0], center });
+        index += length;
+        matched = true;
+        break;
+      }
+      if (!matched) index++;
+    }
+    const names = columns.map(column => column.name);
+    return names.includes('description') && names.includes('amount') && names.includes('quantity')
+      && names.filter(name => name === 'amount').length === 1 ? columns : null;
+  }
+
+  function chooseTableReading(current, candidate) {
+    return candidate.rows.length && preferReading(current, candidate) ? candidate : current;
+  }
+
+  function readColumns(words, format) {
+    const rows = visualRows(words);
+    const products = [];
+    let columns = null;
+    let previous = null;
+    for (const row of rows) {
+      const headers = invoiceColumns(row);
+      if (headers) {
+        columns = headers;
+        previous = null;
+        continue;
+      }
+      if (!columns) continue;
+      const visible = row.map(word => word.text).join(' ');
+      if (/^(?:sub\s*total|(?:grand|invoice|net|final)\s+total|total\b|tax\b|sales tax|vat\b|iva\b|impuesto|discount|descuento|shipping|env[ií]o|amount due|balance due|saldo|payment|pago)\b/i.test(visible)) {
+        columns = null;
+        previous = null;
+        continue;
+      }
+      const values = Object.create(null);
+      for (const word of row) {
+        const center = word.x + word.width / 2;
+        const column = columns.findIndex((col, i) => i === columns.length - 1 || center < (col.center + columns[i + 1].center) / 2);
+        const name = columns[column].name;
+        (values[name] ||= []).push(word.text);
+      }
+
+      const description = (values.description ?? []).join(' ');
+      const amountText = (values.amount ?? []).join(' ').replace(/\s+(?=[.,]\d{2}\b)|(?<=[.,])\s+(?=\d{2}\b)/g, '');
+      const cost = /\d[.,]\d{2}$/.test(amountText) ? moneyCents(amountText) : null;
+      const qtyText = (values.quantity ?? []).join(' ');
+      const qty = count(qtyText);
+      if (cost === null) {
+        if (previous && description && !values.amount && !values.quantity && !values.code && !values.unitPrice && !values.other && !values.measure && !values.lineDiscount) {
+          previous.nombre += ' ' + description;
+        } else previous = null;
+        continue;
+      }
+      if (!/[a-záéíóúñ]{2}/i.test(description)) {
+        previous = null;
+        continue;
+      }
+      const measure = (values.measure ?? []).join(' ');
+      const pack = unitsFromDescription(description);
+      const ambiguous = /\b(?:cases?|cajas?|packs?|ctn|cartons?|box(?:es)?|kg|lb|lbs)\b|\b\d+\s*\/\s*C\b/i.test(measure + ' ' + description);
+      const confirmPack = (format === 'taino' && !pack) || (ambiguous && !pack);
+      const unitPrice = moneyCents((values.unitPrice ?? []).join(' '));
+      const discount = moneyCents((values.lineDiscount ?? []).join(' '));
+      const discountMatches = qty !== null && unitPrice !== null && discount !== null &&
+        qty * unitPrice - Math.abs(discount) === cost;
+      previous = {
+        nombre: description, codigo: values.code?.join(''),
+        cantidad_comprada: qty,
+        unidades_por_empaque: pack ?? (confirmPack ? null : 1),
+        precio_empaque: unitPrice === null || discountMatches ? null : unitPrice / 100,
+        total_linea: cost / 100,
+        observacion: confirmPack ? 'Confirma las unidades vendibles o el contenido del empaque.' : ''
+      };
+      products.push(previous);
+    }
+    return normalize({ productos: products }).rows;
+  }
+
+  function readEmbeddedInvoice(words, format) {
+    if (!words?.length) return null;
+    const text = visualRows(words).map(row => row.map(word => word.text).join(' ')).join('\n');
+    const parsed = parseText(text, { format: format || undefined });
+    const reading = chooseTableReading(parsed, { rows: readColumns(words, format || detectFormat(text)), totals: parsed.totals });
+    return { text, reading };
+  }
+
   function suggestedPrice(cost, quantity, margin) {
     if (!positive(cost) || !count(quantity)) return null;
     return Math.ceil((Number(cost) / Number(quantity) / (1 - margin / 100) - 1e-9) * 100) / 100;
@@ -247,7 +379,7 @@
     return Number.isFinite(unitPriceInCents) ? Math.max(0, Math.ceil(unitPriceInCents - 1e-9)) / 100 : null;
   }
 
-  const invoice = { normalize, parseText, suggestedPrice, priceWithMarkup, moneyCents, reconcile, preferReading, detectFormat,
+  const invoice = { normalize, parseText, suggestedPrice, priceWithMarkup, moneyCents, reconcile, preferReading, detectFormat, readColumns, tsvWords, chooseTableReading, readEmbeddedInvoice,
     isDairyInvoice: text => detectFormat(text) === 'dairy' };
   if (typeof module === 'object') module.exports = invoice;
   else window.PorcentoFactura = invoice;

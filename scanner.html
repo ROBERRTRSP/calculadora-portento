@@ -112,7 +112,7 @@
       </div>
     </details>
   </main>
-  <script src="./factura.js?v=16"></script>
+  <script src="./factura.js?v=17"></script>
   <script>
 const $ = id => document.getElementById(id);
 const money = n => Number.isFinite(n) ? '$' + n.toFixed(2) : '—';
@@ -293,6 +293,7 @@ function updateInvoiceSummary(check) {
     check.subtotalDifference ? differenceText(check.subtotalDifference) + ' para cuadrar el subtotal.' : '',
     check.difference ? differenceText(check.difference) + ' para cuadrar el total.' : '',
     check.pending ? 'Confirma los importes pendientes.' : '',
+    totals.foreignCurrency ? 'Se detectó otra moneda. Los precios de Porcento están en dólares estadounidenses.' : '',
     totals.conflictingTotal ? 'Las dos lecturas dieron totales distintos. Confirma el que aparece en la factura.' : '',
     totals.adjustments.includes(null) ? 'Hay un ajuste impreso por confirmar.' : '',
     totals.partial ? 'La imagen o el documento está incompleto.' : '',
@@ -343,6 +344,23 @@ async function readCanvas(file) {
       const page = await doc.getPage(1);
       const natural = page.getViewport({ scale: 1 });
       const viewport = page.getViewport({ scale: Math.min(3, 3000 / Math.max(natural.width, natural.height)) });
+      if (doc.numPages === 1) {
+        try {
+          const text = await page.getTextContent();
+          canvas.invoiceWords = text.items.flatMap(item => {
+            if (!item.str?.trim() || !item.transform || item.width <= 0 || item.height <= 0) return [];
+            const [x, baseline] = viewport.convertToViewportPoint(item.transform[4], item.transform[5]);
+            const height = item.height * viewport.scale;
+            const terms = [...item.str.matchAll(/\S+/g)];
+            return terms.map(term => ({
+              text: term[0], x: x + item.width * viewport.scale * term.index / item.str.length,
+              y: baseline - height, width: item.width * viewport.scale * term[0].length / item.str.length, height
+            }));
+          });
+        } catch {
+          // The rendered page is still available for OCR.
+        }
+      }
       canvas.width = Math.round(viewport.width);
       canvas.height = Math.round(viewport.height);
       await page.render({ canvasContext: context, viewport }).promise;
@@ -571,11 +589,17 @@ $('ai').onclick = () => {
 
 $('read').onclick = () => withInvoice(async canvas => {
   preview(canvas);
-  await loadScript('https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js');
+  const selectedFormat = $('invoiceFormat').value;
+  const embedded = invoice.readEmbeddedInvoice(canvas.invoiceWords, selectedFormat);
+  if (embedded && readingIsVerified(embedded.reading) && !selectedTotalPhoto) {
+    $('raw').value = embedded.text;
+    displayInvoice(embedded.reading);
+    return;
+  }
+  await loadScript('https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js');
   $('status').textContent = 'Leyendo los productos…';
   const Tesseract = window.Tesseract;
   const worker = await Tesseract.createWorker('eng+spa');
-  const selectedFormat = $('invoiceFormat').value;
   const setMode = mode => worker.setParameters({ tessedit_pageseg_mode: mode, preserve_interword_spaces: '1' });
   const recognize = async image => (await worker.recognize(image)).data.text;
   const notes = [canvas.dataset.note];
@@ -584,15 +608,27 @@ $('read').onclick = () => withInvoice(async canvas => {
   let separateTotals = null;
   try {
     await setMode(Tesseract.PSM.SINGLE_BLOCK);
-    const firstText = await recognize(canvas);
+    const firstScan = (await worker.recognize(canvas, {}, { text: true, tsv: true })).data;
+    const firstText = firstScan.text;
     let format = selectedFormat || invoice.detectFormat(firstText);
     const parse = input => invoice.parseText(input, { format: format || undefined });
     const firstTotal = parse(firstText).totals.total;
-    const consider = (input, footer = separateTotals) => {
-      const next = parse(input);
+    const consider = (input, footer = separateTotals, words = []) => {
+      let next = parse(input);
+      if (words.length) {
+        const table = invoice.readEmbeddedInvoice(words, format);
+        const combined = table.reading;
+        combined.totals.subtotal ??= next.totals.subtotal;
+        combined.totals.total ??= next.totals.total;
+        combined.totals.foreignCurrency ||= next.totals.foreignCurrency;
+        if (!combined.totals.adjustments.length) combined.totals.adjustments = next.totals.adjustments;
+        next = combined.rows.length ? combined : next;
+        if (next === combined) input = table.text;
+      }
       const tableTotal = next.totals.total ?? firstTotal;
       next.totals.total = tableTotal;
       if (footer) {
+        next.totals.foreignCurrency ||= footer.foreignCurrency;
         if (footer.total !== null && tableTotal !== null && tableTotal !== footer.total) {
           next.totals.conflictingTotal = true;
         }
@@ -622,12 +658,15 @@ $('read').onclick = () => withInvoice(async canvas => {
       }
     }
     consider(firstText);
+    if (!readingIsVerified(result)) consider(firstText, separateTotals, invoice.tsvWords(firstScan.tsv));
+    if (embedded) consider(embedded.text, separateTotals, canvas.invoiceWords);
     if (!readingIsVerified(result)) {
       $('status').textContent = 'Ampliando la tabla y revisando los importes…';
       try {
         await setMode(Tesseract.PSM.SINGLE_BLOCK);
-        const focused = await recognize(ocrRegion(canvas, 0, 1, 0, 1, 2));
-        consider(focused);
+        const focused = (await worker.recognize(ocrRegion(canvas, 0, 1, 0, 1, 2), {}, { text: true, tsv: true })).data;
+        consider(focused.text);
+        if (!readingIsVerified(result)) consider(focused.text, separateTotals, invoice.tsvWords(focused.tsv));
         if (!readingIsVerified(result) && !selectedTotalPhoto) {
           const table = await recognize(ocrRegion(canvas, .07, .61));
           format ||= invoice.detectFormat(table);
@@ -679,6 +718,7 @@ $('parse').onclick = () => {
   const result = invoice.parseText($('raw').value, { format: $('invoiceFormat').value || undefined });
   if (totals) {
     result.totals.partial ||= totals.partial;
+    result.totals.foreignCurrency ||= totals.foreignCurrency;
     result.totals.conflictingTotal ||= totals.conflictingTotal;
     if (totals.manualTotal || result.totals.total === null) {
       result.totals.total = totals.total;
