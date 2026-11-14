@@ -40,3 +40,8 @@ Porcento incluye el endpoint **GET /prices?upc=012345678905** en `worker/worker.
 ### Seguridad y costos
 
 SerpApi usa cuotas de búsqueda; una consulta UPC puede consumir una o dos búsquedas. El permiso CORS a GitHub Pages **no es autenticación**: configura límites de peticiones y protección de abuso en Cloudflare antes de compartir el servicio públicamente. Los precios pueden excluir impuestos, envío o disponibilidad local. Walmart, Amazon u otros comercios aparecen solo si Google Shopping los devuelve.
+
+
+### Lectura de facturas con letra pequeña
+
+Publica el `worker.js` actual en el Worker existente y configura `OPENAI_API_KEY` como secreto de Cloudflare. En Porcento abre **Leer factura → Leer con IA**. Activa las ampliaciones para tickets largos: el lector enviará la foto y tres recortes de la misma imagen en una única consulta. La respuesta separa el importe impreso, la cantidad de empaques y las unidades vendibles. Porcento compara la suma de las líneas con el subtotal de productos o con el total impreso cuando el subtotal no aparece. Los artículos marcados para revisión requieren confirmar el costo y las unidades antes de mostrar precios sugeridos.
