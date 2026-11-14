@@ -44,10 +44,10 @@
       <p id="status" class="status" role="status"></p>
       <img id="preview" hidden alt="Vista previa de la factura">
       <details class="invoice-disclosure" id="connection">
-        <summary>Configurar lectura con IA</summary>
+        <summary>Ajustes de conexión con IA</summary>
         <div class="details-body">
           <label for="endpoint">Dirección del servidor</label>
-          <input id="endpoint" type="url" placeholder="https://tu-servidor.workers.dev">
+          <input id="endpoint" type="url" inputmode="url" autocapitalize="none" spellcheck="false">
           <button id="saveEndpoint" type="button">Guardar dirección</button>
           <small class="caption">Al usar IA, se envía la imagen al servidor configurado y al proveedor de IA.</small>
         </div>
@@ -73,7 +73,39 @@
   </main>
   <script src="./factura.js"></script>
   <script>
-const $=id=>document.getElementById(id), money=n=>Number.isFinite(n)?'$'+n.toFixed(2):'—';let rows=[];$('endpoint').value=localStorage.getItem('porcento_ai_endpoint')||'';$('saveEndpoint').onclick=()=>{let v=$('endpoint').value.trim().replace(/\/$/,'');if(!/^https:\/\//.test(v)){$('status').textContent='La dirección debe comenzar con https://';return}localStorage.setItem('porcento_ai_endpoint',v);$('status').textContent='Dirección guardada.'};
+const $ = id => document.getElementById(id);
+const money = n => Number.isFinite(n) ? '$' + n.toFixed(2) : '—';
+const DEFAULT_AI_ENDPOINT = 'https://porcento-ia.riverminimarket2.workers.dev';
+const ENDPOINT_KEY = 'porcento_ai_endpoint';
+let rows = [];
+try {
+  $('endpoint').value = localStorage.getItem(ENDPOINT_KEY) || DEFAULT_AI_ENDPOINT;
+} catch {
+  $('endpoint').value = DEFAULT_AI_ENDPOINT;
+}
+$('saveEndpoint').onclick = () => {
+  const endpoint = $('endpoint').value.trim() || DEFAULT_AI_ENDPOINT;
+  if (!validEndpoint(endpoint)) {
+    $('status').textContent = 'Escribe una dirección válida que comience con https://.';
+    return;
+  }
+  $('endpoint').value = endpoint;
+  try {
+    localStorage.setItem(ENDPOINT_KEY, endpoint);
+    $('status').textContent = 'Dirección guardada.';
+  } catch {
+    $('status').textContent = 'La dirección estará disponible mientras mantengas esta página abierta.';
+  }
+};
+
+function validEndpoint(endpoint) {
+  try {
+    const url = new URL(endpoint);
+    return url.protocol === 'https:' && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+}
 function draw() {
   const items = $('items');
   items.replaceChildren();
@@ -300,11 +332,11 @@ function preview(canvas) {
 }
 
 $('ai').onclick = () => {
-  const endpoint = $('endpoint').value.trim().replace(/\/$/, '');
-  if (!/^https:\/\//.test(endpoint)) {
+  const endpoint = $('endpoint').value.trim() || DEFAULT_AI_ENDPOINT;
+  if (!validEndpoint(endpoint)) {
     $('connection').open = true;
     $('endpoint').focus();
-    $('status').textContent = 'Escribe la dirección del servidor de IA.';
+    $('status').textContent = 'Escribe una dirección válida que comience con https://.';
     return;
   }
   return withInvoice(async canvas => {
@@ -317,8 +349,11 @@ $('ai').onclick = () => {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
       signal: AbortSignal.timeout(120000)
     });
-    const data = await response.json();
-    if (!response.ok) throw Error(data.error || 'No se completó la lectura con IA.');
+    const data = await response.json().catch(() => null);
+    if (response.status === 503 && typeof data?.error === 'string' && data.error.includes('OPENAI_API_KEY')) {
+      throw Error('El servidor está conectado. Falta activar la clave de OpenAI en Cloudflare. Puedes usar el lector básico.');
+    }
+    if (!response.ok || !data) throw Error(data?.error || 'No se completó la lectura con IA. Puedes usar el lector básico.');
     if (!Array.isArray(data.productos) || !data.productos.length) throw Error('La IA no encontró productos. Prueba una foto más cerca.');
     displayInvoice(invoice.normalize(data), [canvas.dataset.note, ...(Array.isArray(data.observaciones) ? data.observaciones : [])]);
   });
