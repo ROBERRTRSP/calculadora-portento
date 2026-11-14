@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  const money = '\\$?\\s*(\\d{1,7}[.,]\\d{2})';
+  const money = '(-?\\$?\\s*(?:\\d{1,3}(?:,\\d{3})+\\.\\d{2}|\\d{1,7}[.,]\\d{2}))';
   const amount = value => {
     if (typeof value === 'number') return Number.isFinite(value) && value >= 0 ? value : null;
     if (typeof value !== 'string' || !/^\d+(?:[.,]\d+)?$/.test(value.trim())) return null;
@@ -16,7 +16,45 @@
     const n = amount(value);
     return Number.isSafeInteger(n) && n > 0 ? n : null;
   };
-  const cents = value => Math.round(value * 100);
+  function moneyCents(value) {
+    if (typeof value !== 'string' && typeof value !== 'number') return null;
+    const text = String(value).trim();
+    const match = text.match(/^(-?)\$?\s*(\d{1,9}|\d{1,3}(?:,\d{3}){1,2})(?:([.,])(\d{1,2}))?$/);
+    if (!match || (match[2].includes(',') && match[3] === ',')) return null;
+    const magnitude = Number(match[2].replaceAll(',', '')) * 100 + Number((match[4] || '').padEnd(2, '0'));
+    return match[1] === '-' ? -magnitude : magnitude;
+  }
+
+  function reconcile(rows, totals) {
+    let sum = 0;
+    let pending = 0;
+    for (const row of rows) {
+      const line = moneyCents(row.costo);
+      if (!row.nombre.trim() || line === null || row.costUnconfirmed) pending++;
+      if (line !== null) sum += line;
+    }
+    const { subtotal, total, adjustments } = totals;
+    const adjustmentTotal = adjustments.reduce((sum, adjustment) => sum + adjustment, 0);
+    const computed = sum + adjustmentTotal;
+    const subtotalDifference = subtotal === null ? null : subtotal - sum;
+    const difference = total === null ? null : total - computed;
+    const verified = rows.length > 0 && pending === 0 && !totals.partial && !adjustments.includes(null)
+      && difference === 0 && (subtotalDifference === null || subtotalDifference === 0);
+    return { sum, computed, difference, subtotalDifference, pending, verified };
+  }
+
+  function preferReading(current, next) {
+    const a = reconcile(current.rows, current.totals);
+    const b = reconcile(next.rows, next.totals);
+    if (a.verified !== b.verified) return b.verified;
+    if (Boolean(current.rows.length) !== Boolean(next.rows.length)) return next.rows.length > 0;
+    if (a.difference === null && b.difference !== null) return true;
+    if (a.difference !== null && b.difference === null) return false;
+    const gap = check => Math.abs(check.difference || 0) + Math.abs(check.subtotalDifference || 0);
+    if (gap(a) !== gap(b)) return gap(b) < gap(a);
+    if (a.pending !== b.pending) return b.pending < a.pending;
+    return next.rows.length > current.rows.length;
+  }
 
   function unitsFromDescription(name) {
     // Weight/volume lookalikes from receipts such as 16.9OZ -> 16.902.
@@ -39,30 +77,36 @@
       const nombre = raw.nombre.trim().slice(0, 180);
       const packages = count(raw.cantidad_comprada);
       const pack = count(raw.unidades_por_empaque);
-      const line = positive(raw.total_linea);
-      const price = positive(raw.precio_empaque);
+      const line = moneyCents(raw.total_linea);
+      const price = moneyCents(raw.precio_empaque);
       const pcs = count(raw.piezas_facturadas);
       const directQuantity = count(raw.unidades_vendibles_totales);
       const computedQuantity = packages && pack ? count(packages * pack) : null;
       const quantity = directQuantity ?? computedQuantity;
-      const reconstructed = packages && price ? packages * price : null;
+      const reconstructed = packages && price !== null && price >= 0 ? packages * price : null;
       const cost = line ?? reconstructed;
       const warnings = [];
-      const mismatch = line !== null && reconstructed !== null && Math.abs(cents(line) - cents(reconstructed)) > 1;
+      const mismatch = line !== null && reconstructed !== null && line !== reconstructed;
       if (directQuantity && computedQuantity && directQuantity !== computedQuantity) warnings.push('Las unidades indicadas difieren de la cantidad de empaques por sus unidades.');
       if (mismatch) warnings.push('La cantidad comprada por el precio del empaque difiere del importe impreso.');
       if (!quantity) warnings.push(pcs ? 'Confirma si las piezas impresas corresponden a unidades vendibles.' : 'Confirma las unidades vendibles.');
-      if (!cost) warnings.push('Confirma el importe de la línea.');
+      if (line === null) warnings.push('Confirma el importe impreso de la línea.');
       if (raw.confianza === 'baja') warnings.push('Lectura dudosa.');
       if (typeof raw.observacion === 'string' && raw.observacion.trim()) warnings.push(raw.observacion.trim().slice(0, 260));
       const parts = [packages && pack && pack > 1 ? packages + ' × ' + pack : '', raw.codigo && /^\d{4,14}$/.test(String(raw.codigo)) ? 'Código ' + raw.codigo : ''].filter(Boolean);
       return {
-        nombre, costo: cost ? cost.toFixed(2) : '', cantidad: quantity || '',
+        nombre, costo: cost === null ? '' : (cost / 100).toFixed(2), cantidad: quantity || '',
+        costUnconfirmed: line === null,
         info: parts.join(' · '), warning: warnings.join(' '), review: warnings.length > 0 || raw.confianza === 'media'
       };
     });
-    const printed = positive(data.subtotal_productos) ?? positive(data.total_factura);
-    return { rows, printed };
+    const totals = {
+      subtotal: moneyCents(data.subtotal_productos),
+      total: moneyCents(data.total_factura),
+      adjustments: Array.isArray(data.ajustes) ? data.ajustes.map(adjustment => moneyCents(adjustment?.importe)) : [],
+      partial: data.lectura_parcial === true || rows.length !== products.length
+    };
+    return { rows, totals };
   }
 
   function parseText(text) {
@@ -70,16 +114,31 @@
     const recent = [];
     const products = [];
     const textRow = new RegExp('^\\s*\\d{1,4}\\s+(.+?)\\s+(\\d+)\\s*(ca(?:ja)?s?|cs|cases?|un(?:d|id(?:ades)?)?)\\s+' + money + '(?:\\s+' + money + ')?[|\\s]*$', 'i');
-    const tableRow = new RegExp('^([0-9]{8,14})[|.\\s]+(.+?)\\s+(\\d+)\\s+' + money + '(?:[|\\s]+' + money + ')?[|\\s]*$', 'i');
+    const tableRow = new RegExp('^([0-9]{6,14})[|.\\s]+(.+?)\\s+(\\d+)\\s+' + money + '(?:[|\\s]+' + money + ')?[|\\s]*$', 'i');
     const receiptPrice = new RegExp('^(\\d+)\\s*(cases?|cs(?:-\\d+)?|bx|box|bags?|bg|dz|pk(?:-\\d+)?|pack|each|ea)\\s*@\\s*' + money + '(?:[|\\s]+' + money + ')?[|\\s]*$', 'i');
     const dairyRow = new RegExp('^(\\d{3,6})\\s+(?:[-_/]+\\s+)*(\\d+)\\s*(?:[-_/]+\\s+)?(.+?)\\s+(\\d+)\\s+' + money + '[|\\s]*$');
     const dairy = /JERSEY\s+DAIRY|CASE\s*\/\s*UNIT[^\n]*\bPCS\b/i.test(text);
-    let printed = null, itemCode = '';
-    for (const rawLine of lines) {
+    const amountOnly = new RegExp('^' + money + '$');
+    const totalLabel = /^(invoice total|total this invoice|total factura|total neto|grand total|sub\s*total(?:\s+de\s+productos)?|total)\b[\s:/]*(.*)$/i;
+    const adjustmentLabel = /^(sales tax|total tax|tax|impuesto(?:s)?|itbis|shipping(?: fee)?|freight|flete|env[ií]o|deposit(?: fee)?|dep[oó]sito|service fee|recargo|discount|descuento)\b\s*[:/]*\s*(.*)$/i;
+    const adjustments = [];
+    let subtotal = null, total = null, genericTotal = null, itemCode = '';
+    for (let index = 0; index < lines.length; index++) {
+      const rawLine = lines[index];
       const line = rawLine.replace(/^[|\s]+/,'').replace(/\s*\|\s*/g, ' ').trim();
-      const total = line.match(new RegExp('^(?:invoice total|total this invoice|total neto|subtotal|total)[:\\s/]*' + money + '\\s*$', 'i'));
-      if (total) {
-        printed ??= amount(total[1]);
+      const adjustmentMatch = line.match(adjustmentLabel);
+      const totalMatch = !adjustmentMatch && line.match(totalLabel);
+      if (adjustmentMatch || totalMatch) {
+        const [, label, tail] = adjustmentMatch || totalMatch;
+        const match = (tail || lines[index + 1] || '').match(amountOnly);
+        if (match) {
+          if (!tail) index++;
+          const value = match[1];
+          if (adjustmentMatch) adjustments.push({ importe: /discount|descuento/i.test(label) && !value.startsWith('-') ? '-' + value : value });
+          else if (/^sub\s*total/i.test(label)) subtotal = value;
+          else if (/^total$/i.test(label)) genericTotal = value;
+          else total = value;
+        }
         continue;
       }
       const item = line.match(/^[IlTt]tem\s*(?:no\.?)?\s*[:.;]*\s*(\d{4,8})\s*$/i);
@@ -133,7 +192,7 @@
       if (!/^[-_\s]+$/.test(line)) recent.push(line);
       if (recent.length > 2) recent.shift();
     }
-    return normalize({ productos: products, subtotal_productos: printed });
+    return normalize({ productos: products, subtotal_productos: subtotal, total_factura: total ?? genericTotal, ajustes: adjustments });
   }
 
   function suggestedPrice(cost, quantity, margin) {
@@ -141,7 +200,7 @@
     return Math.ceil((Number(cost) / Number(quantity) / (1 - margin / 100) - 1e-9) * 100) / 100;
   }
 
-  const invoice = { normalize, parseText, suggestedPrice, cents };
+  const invoice = { normalize, parseText, suggestedPrice, moneyCents, reconcile, preferReading };
   if (typeof module === 'object') module.exports = invoice;
   else window.PorcentoFactura = invoice;
 })();
