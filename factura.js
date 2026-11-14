@@ -206,7 +206,15 @@
     return Math.ceil((Number(cost) / Number(quantity) / (1 - margin / 100) - 1e-9) * 100) / 100;
   }
 
-  const invoice = { normalize, parseText, suggestedPrice, moneyCents, reconcile, preferReading, isDairyInvoice };
+  function priceWithMarkup(cost, quantity) {
+    const purchase = amount(cost);
+    const units = count(quantity);
+    if (purchase === null || units === null) return null;
+    const unitPriceInCents = purchase / units * 150;
+    return Number.isFinite(unitPriceInCents) ? Math.max(0, Math.ceil(unitPriceInCents - 1e-9)) / 100 : null;
+  }
+
+  const invoice = { normalize, parseText, suggestedPrice, priceWithMarkup, moneyCents, reconcile, preferReading, isDairyInvoice };
   if (typeof module === 'object') module.exports = invoice;
   else window.PorcentoFactura = invoice;
 })();

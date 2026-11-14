@@ -22,6 +22,7 @@
     .margins .amount { color: var(--accent); display: block; font-size: clamp(18px, 4.7vw, 24px); letter-spacing: -.045em; }
     .margin-label { color: var(--accent); font-size: 12px; font-weight: 680; }
     .profit-label { display: block; }
+    .markup-price { margin-top: 8px; padding-top: 7px; border-top: 1px solid var(--hairline); }
     .sale-results { border-top: 1px solid var(--hairline); margin-top: 8px; padding-top: 7px; }
     .sale-results strong { display: block; }
     .tools { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
@@ -71,6 +72,10 @@
         <div><span class="margin-label">45%</span><strong class="amount">—</strong><small class="profit-label" hidden></small></div>
         <div><span class="margin-label">50%</span><strong class="amount">—</strong><small class="profit-label" hidden></small></div>
       </div>
+      <div class="unit markup-price">
+        <h2>Precio con costo +50%</h2>
+        <strong class="amount" id="markupPrice">—</strong>
+      </div>
       <div class="sale-results" id="custom" hidden>
         <div><small>Margen bruto</small><strong class="amount" id="saleMargin"></strong></div>
         <div><small>Ganancia por unidad</small><strong class="amount" id="saleProfit"></strong></div>
@@ -90,6 +95,7 @@
     </nav>
   </main>
 
+  <script src="./factura.js?v=15"></script>
   <script>
     const $ = id => document.getElementById(id);
     const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
@@ -112,6 +118,8 @@
       $('inputStatus').textContent = !validUnits ? 'Escribe una cantidad entera mayor que cero.'
         : purchase < 0 ? 'El costo debe ser de $0 o más.' : '';
       $('unit').textContent = validCost ? money.format(unit) : '—';
+      const markupPrice = validCost ? window.PorcentoFactura.priceWithMarkup(purchase, units) : null;
+      $('markupPrice').textContent = markupPrice === null ? '—' : money.format(markupPrice);
 
       margins.forEach((margin, index) => {
         const [, amount, profit] = suggestions[index].children;

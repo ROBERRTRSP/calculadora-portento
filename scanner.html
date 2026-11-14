@@ -32,6 +32,8 @@
     .invoice-prices { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; margin-top: 8px; }
     .invoice-prices > div { background: var(--tint); border-radius: 10px; text-align: center; padding: 5px; min-width: 0; }
     .invoice-prices .amount { display: block; color: var(--accent); }
+    .invoice-markup { margin-top: 6px; padding: 7px 8px; display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+    .invoice-markup .amount { color: var(--accent); }
     .invoice-options { display: flex; align-items: center; gap: 9px; min-height: 44px; margin: 4px 0 0; }
     .invoice-options input { appearance: auto; width: 20px; height: 20px; min-height: 0; margin: 0; accent-color: var(--accent); }
     .invoice-warning { margin: 7px 0; color: var(--negative); }
@@ -107,7 +109,7 @@
       </div>
     </details>
   </main>
-  <script src="./factura.js"></script>
+  <script src="./factura.js?v=15"></script>
   <script>
 const $ = id => document.getElementById(id);
 const money = n => Number.isFinite(n) ? '$' + n.toFixed(2) : '—';
@@ -225,7 +227,15 @@ function draw() {
       };
       product.append(note, confirm);
     }
-    product.append(prices);
+    const markup = document.createElement('div');
+    markup.className = 'invoice-markup';
+    const markupLabel = document.createElement('small');
+    markupLabel.textContent = 'Precio con costo +50%';
+    const markupAmount = document.createElement('strong');
+    markupAmount.className = 'amount';
+    markupAmount.dataset.markup = '50';
+    markup.append(markupLabel, markupAmount);
+    product.append(prices, markup);
     items.append(product);
   });
   recalc();
@@ -235,11 +245,14 @@ function recalc() {
   const check = totals ? invoice.reconcile(rows, totals) : null;
   [...$('items').children].forEach((product, index) => {
     const row = rows[index];
+    const pending = row.review || (check && !check.verified);
     for (const amount of product.querySelectorAll('[data-margin]')) {
       const margin = Number(amount.dataset.margin);
-      const price = row.review || (check && !check.verified) ? null : invoice.suggestedPrice(row.costo, row.cantidad, margin);
+      const price = pending ? null : invoice.suggestedPrice(row.costo, row.cantidad, margin);
       amount.textContent = price === null ? '—' : money(price);
     }
+    const markupPrice = pending ? null : invoice.priceWithMarkup(row.costo, row.cantidad);
+    product.querySelector('[data-markup]').textContent = markupPrice === null ? '—' : money(markupPrice);
   });
   updateInvoiceSummary(check);
 }
@@ -651,11 +664,13 @@ $('export').onclick = () => {
     if (/^[=+\-@\t\r]/.test(text)) text = "'" + text;
     return '"' + text.replace(/"/g, '""') + '"';
   };
-  const lines = [['Producto', 'Costo total', 'Unidades', 'Costo por unidad', '33%', '45%', '50%', 'Por revisar']];
+  const lines = [['Producto', 'Costo total', 'Unidades', 'Costo por unidad', '33%', '45%', '50%', 'Por revisar', 'Precio con costo +50%']];
   for (const row of rows) {
     const prices = margins.map(margin => row.review ? null : invoice.suggestedPrice(row.costo, row.cantidad, margin));
+    const markup = row.review ? null : invoice.priceWithMarkup(row.costo, row.cantidad);
     lines.push([row.nombre, row.costo, row.cantidad,
-      prices[0] === null ? '' : Number(row.costo) / Number(row.cantidad), ...prices, row.warning || (row.review ? 'Revisar' : '')]);
+      prices[0] === null ? '' : Number(row.costo) / Number(row.cantidad), ...prices,
+      row.warning || (row.review ? 'Revisar' : ''), markup === null ? '' : markup.toFixed(2)]);
   }
   const csv = lines.map(line => line.map(quote).join(',')).join('\r\n');
   const download = document.createElement('a');
