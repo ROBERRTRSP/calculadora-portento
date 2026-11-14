@@ -18,6 +18,8 @@
     .invoice-disclosure { margin-top: 8px; }
     .invoice-disclosure .caption { display: block; margin-top: 8px; }
     #items { margin-top: 8px; }
+    #printedTotalEntry { margin-top: 10px; }
+    #printedTotalEntry input { margin-bottom: 6px; }
     #invoiceSummary[data-state="review"] { color: var(--negative); }
     .product { padding-top: 7px; border-top: 1px solid var(--hairline); }
     .product + .product { margin-top: 8px; }
@@ -66,6 +68,12 @@
     <section class="card" aria-labelledby="products-heading">
       <h2 id="products-heading">Productos</h2>
       <p id="invoiceSummary" class="status" aria-live="polite"></p>
+      <form id="printedTotalEntry" hidden>
+        <label for="printedTotal">Total impreso en la factura ($)</label>
+        <input id="printedTotal" type="text" inputmode="decimal" placeholder="0.00" autocomplete="off">
+        <button type="submit">Comprobar total</button>
+        <p id="totalInputStatus" class="status" role="status"></p>
+      </form>
       <div id="items"></div>
       <div class="actions invoice-actions">
         <button id="add" type="button">Añadir producto</button>
@@ -227,10 +235,12 @@ function displayInvoice(result, notes = []) {
   rows = result.rows;
   totals = result.totals;
   documentNotes = Array.isArray(notes) ? notes.filter(note => typeof note === 'string').slice(0, 5) : [];
+  $('printedTotal').value = totals.total === null ? '' : (totals.total / 100).toFixed(2);
+  $('totalInputStatus').textContent = '';
   draw();
   $('status').textContent = rows.length
     ? rows.length + (rows.length === 1 ? ' producto detectado.' : ' productos detectados.')
-    : 'No pude identificar productos. Prueba una foto más cerca o añade un producto manualmente.';
+    : 'No pude identificar productos. Toma una foto más cerca de la tabla o añade los renglones manualmente.';
 }
 
 function updateInvoiceSummary(check) {
@@ -239,22 +249,36 @@ function updateInvoiceSummary(check) {
   const reviewCount = rows.filter(row => row.review || !Number(row.costo) || !Number(row.cantidad)).length;
   const differenceText = difference => difference > 0 ? 'Faltan ' + formatted(difference) : 'Sobran ' + formatted(-difference);
   summary.dataset.state = check && !check.verified ? 'review' : '';
+  $('printedTotalEntry').hidden = !check || check.verified;
   summary.textContent = check ? [
     check.verified ? 'Total cuadrado.' : 'Factura pendiente de revisión.',
-    'Importes leídos: ' + formatted(check.sum) + '.',
+    rows.some(row => invoice.moneyCents(row.costo) !== null) ? 'Importes registrados: ' + formatted(check.sum) + '.' : 'Aún no hay importes de productos.',
     totals.subtotal === null ? '' : 'Subtotal impreso: ' + formatted(totals.subtotal) + '.',
     check.computed === check.sum ? '' : 'Con ajustes: ' + formatted(check.computed) + '.',
-    totals.total === null ? 'No se pudo leer el total impreso. Toma una foto que incluya el final.' : 'Total impreso: ' + formatted(totals.total) + '.',
+    totals.total === null ? 'El total impreso no se pudo leer. Puedes escribirlo abajo.' : (totals.manualTotal ? 'Total escrito: ' : 'Total impreso: ') + formatted(totals.total) + '.',
     check.subtotalDifference ? differenceText(check.subtotalDifference) + ' para cuadrar el subtotal.' : '',
     check.difference ? differenceText(check.difference) + ' para cuadrar el total.' : '',
     check.pending ? 'Confirma los importes pendientes.' : '',
     totals.adjustments.includes(null) ? 'Hay un ajuste impreso por confirmar.' : '',
     totals.partial ? 'La imagen o el documento está incompleto.' : '',
-    reviewCount ? reviewCount + (reviewCount === 1 ? ' producto por revisar.' : ' productos por revisar.') : '',
+    reviewCount ? reviewCount + (reviewCount === 1 ? ' renglón por revisar.' : ' renglones por revisar.') : '',
     ...documentNotes
   ].filter(Boolean).join(' ') : '';
   $('export').disabled = !rows.length || Boolean(check && !check.verified);
 }
+
+$('printedTotalEntry').onsubmit = event => {
+  event.preventDefault();
+  const entered = invoice.moneyCents($('printedTotal').value);
+  if (!totals || entered === null) {
+    $('totalInputStatus').textContent = 'Escribe el total tal como aparece en la factura.';
+    return;
+  }
+  totals.total = entered;
+  totals.manualTotal = true;
+  $('totalInputStatus').textContent = '';
+  recalc();
+};
 
 const scripts = new Map();
 function loadScript(url) {
@@ -334,6 +358,43 @@ function contrastOf(canvas) {
   return adjusted;
 }
 
+function ocrRegion(source, top, bottom, start = .09, end = .91, magnify = 2) {
+  const crop = document.createElement('canvas');
+  const left = Math.round(source.width * start);
+  const width = Math.round(source.width * end) - left;
+  const height = Math.round(source.height * (bottom - top));
+  const scale = Math.min(magnify, 2150 / width);
+  const border = 18;
+  crop.width = Math.round(width * scale) + border * 2;
+  crop.height = Math.round(height * scale) + border * 2;
+  const context = crop.getContext('2d', { willReadFrequently: true });
+  context.fillStyle = '#fff';
+  context.fillRect(0, 0, crop.width, crop.height);
+  context.imageSmoothingQuality = 'high';
+  context.drawImage(source, left, Math.round(top * source.height), width, height,
+    border, border, crop.width - border * 2, crop.height - border * 2);
+
+  const image = context.getImageData(0, 0, crop.width, crop.height);
+  const pixels = image.data;
+  const histogram = new Uint32Array(256);
+  for (let i = 0; i < pixels.length; i += 4) {
+    const gray = (pixels[i] * 299 + pixels[i + 1] * 587 + pixels[i + 2] * 114) / 1000 | 0;
+    pixels[i] = gray;
+    histogram[gray]++;
+  }
+  let low = 0, high = 255;
+  let leftCount = pixels.length / 4 * .003, rightCount = pixels.length / 4 * .003;
+  while (low < 230 && (leftCount -= histogram[low]) > 0) low++;
+  while (high > low + 24 && (rightCount -= histogram[high]) > 0) high--;
+  const gain = 255 / Math.max(24, high - low);
+  for (let i = 0; i < pixels.length; i += 4) {
+    const gray = (pixels[i] - low) * gain;
+    pixels[i] = pixels[i + 1] = pixels[i + 2] = gray;
+  }
+  context.putImageData(image, 0, 0);
+  return crop;
+}
+
 function readingIsVerified(result) {
   return invoice.reconcile(result.rows, result.totals).verified;
 }
@@ -394,9 +455,11 @@ async function readWithAI(endpoint, image, details, retry = false) {
     signal: AbortSignal.timeout(retry ? 65000 : 90000)
   });
   const data = await response.json().catch(() => null);
-  if ((response.status === 503 && typeof data?.error === 'string' && data.error.includes('OPENAI_API_KEY')) ||
-      data?.setup_required === true || (response.status === 502 && typeof data?.detail === 'string' && /incorrect api key/i.test(data.detail))) {
-    throw Error('Revisa la clave de OpenAI en Cloudflare. Puedes verificar los importes con el lector básico.');
+  if (response.status === 503 && typeof data?.error === 'string' && data.error.includes('OPENAI_API_KEY')) {
+    throw Error('Falta configurar OPENAI_API_KEY en Cloudflare. Puedes usar Lector básico.');
+  }
+  if (data?.setup_required === true || (response.status === 502 && typeof data?.detail === 'string' && /(?:incorrect|invalid) api key/i.test(data.detail))) {
+    throw Error('OpenAI rechazó la clave del servidor. Usa Lector básico o actualiza OPENAI_API_KEY en Cloudflare.');
   }
   if (response.status === 422) return { productos: [], lectura_parcial: true };
   if (!response.ok || !Array.isArray(data?.productos)) throw Error(data?.error || 'No se completó la lectura con IA. Puedes usar el lector básico.');
@@ -447,14 +510,52 @@ $('read').onclick = () => withInvoice(async canvas => {
     let result = invoice.parseText(text);
     const notes = [canvas.dataset.note];
     if (!readingIsVerified(result)) {
-      $('status').textContent = 'Verificando de nuevo los renglones y el total con más contraste…';
+      $('status').textContent = 'Leyendo la tabla y el total por separado…';
       try {
         await worker.setParameters({ tessedit_pageseg_mode: window.Tesseract.PSM.SINGLE_BLOCK });
-        const second = await worker.recognize(contrastOf(canvas));
-        const candidate = invoice.parseText(second.data.text);
+        const table = await worker.recognize(ocrRegion(canvas, .08, .60));
+        const footer = await worker.recognize(ocrRegion(canvas, .53, .97));
+        let tableText = table.data.text;
+        let footerText = footer.data.text;
+        let footerTotals = invoice.parseText(footerText).totals;
+        if (invoice.isDairyInvoice(text + '\n' + tableText)) {
+          $('status').textContent = 'Ampliando las columnas de Jersey Dairy…';
+          const dairy = await worker.recognize(ocrRegion(canvas, .20, .40, .11, .79));
+          const dairyResult = invoice.parseText(dairy.data.text, { dairy: true });
+          if (invoice.preferReading(invoice.parseText(tableText, { dairy: true }), dairyResult)) {
+            tableText = dairy.data.text;
+          }
+          if (footerTotals.total === null) {
+            await worker.setParameters({ tessedit_pageseg_mode: window.Tesseract.PSM.SPARSE_TEXT });
+            const printed = await worker.recognize(ocrRegion(canvas, .55, .70, .49, .84, 3));
+            await worker.setParameters({ tessedit_pageseg_mode: window.Tesseract.PSM.SINGLE_BLOCK });
+            const focusedTotals = invoice.parseText(printed.data.text).totals;
+            if (focusedTotals.total !== null) {
+              footerText = printed.data.text;
+              footerTotals = focusedTotals;
+            }
+          }
+        }
+        const candidateText = tableText + '\n' + footerText;
+        const candidate = invoice.parseText(tableText, { dairy: invoice.isDairyInvoice(text + '\n' + tableText) });
+        candidate.totals.total ??= footerTotals.total;
+        candidate.totals.subtotal ??= footerTotals.subtotal;
+        if (candidate.totals.adjustments.length === 0) candidate.totals.adjustments = footerTotals.adjustments;
         if (invoice.preferReading(result, candidate)) {
           result = candidate;
-          text = second.data.text;
+          text = candidateText;
+        } else if (result.totals.total === null && footerTotals.total !== null) {
+          result.totals.total = footerTotals.total;
+          text += '\n' + footerText;
+        }
+        if (!readingIsVerified(result)) {
+          const second = await worker.recognize(contrastOf(canvas));
+          const full = invoice.parseText(second.data.text);
+          full.totals.total ??= footerTotals.total;
+          if (invoice.preferReading(result, full)) {
+            result = full;
+            text = second.data.text + '\n' + footerText;
+          }
         }
       } catch {
         notes.push('No se pudo completar la segunda lectura.');

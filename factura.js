@@ -109,23 +109,26 @@
     return { rows, totals };
   }
 
-  function parseText(text) {
+  function isDairyInvoice(text) {
+    return /\bJER[A-Z]{2,4}\s+DA[I1]RY\b|ADDS\s*\/\s*CUTS[^\n]*DESCRIPTION|CASE\s*\/\s*UN[I1T]+[^\n]*\bPCS\b/i.test(text);
+  }
+
+  function parseText(text, { dairy = isDairyInvoice(text) } = {}) {
     const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
     const recent = [];
     const products = [];
     const textRow = new RegExp('^\\s*\\d{1,4}\\s+(.+?)\\s+(\\d+)\\s*(ca(?:ja)?s?|cs|cases?|un(?:d|id(?:ades)?)?)\\s+' + money + '(?:\\s+' + money + ')?[|\\s]*$', 'i');
     const tableRow = new RegExp('^([0-9]{6,14})[|.\\s]+(.+?)\\s+(\\d+)\\s+' + money + '(?:[|\\s]+' + money + ')?[|\\s]*$', 'i');
     const receiptPrice = new RegExp('^(\\d+)\\s*(cases?|cs(?:-\\d+)?|bx|box|bags?|bg|dz|pk(?:-\\d+)?|pack|each|ea)\\s*@\\s*' + money + '(?:[|\\s]+' + money + ')?[|\\s]*$', 'i');
-    const dairyRow = new RegExp('^(\\d{3,6})\\s+(?:[-_/]+\\s+)*(\\d+)\\s*(?:[-_/]+\\s+)?(.+?)\\s+(\\d+)\\s+' + money + '[|\\s]*$');
-    const dairy = /JERSEY\s+DAIRY|CASE\s*\/\s*UNIT[^\n]*\bPCS\b/i.test(text);
+    const dairyRow = new RegExp('^[^\\w]*([0-9]{3,6})[.,)]?\\s+(.*?)\\s+(\\d+)\\s+' + money + '[|\\s]*$');
     const amountOnly = new RegExp('^' + money + '$');
-    const totalLabel = /^(invoice total|total this invoice|total factura|total neto|grand total|sub\s*total(?:\s+de\s+productos)?|total)\b[\s:/]*(.*)$/i;
+    const totalLabel = /^(invoice total|total this inv[o0][i1l]c[e3]|total factura|total neto|grand total|sub\s*total(?:\s+de\s+productos)?|total)\b[\s:/~|]*(.*)$/i;
     const adjustmentLabel = /^(sales tax|total tax|tax|impuesto(?:s)?|itbis|shipping(?: fee)?|freight|flete|env[ií]o|deposit(?: fee)?|dep[oó]sito|service fee|recargo|discount|descuento)\b\s*[:/]*\s*(.*)$/i;
     const adjustments = [];
     let subtotal = null, total = null, genericTotal = null, itemCode = '';
     for (let index = 0; index < lines.length; index++) {
       const rawLine = lines[index];
-      const line = rawLine.replace(/^[|\s]+/,'').replace(/\s*\|\s*/g, ' ').trim();
+      const line = rawLine.replace(/^[|\s]+/,'').replace(/\s*\|\s*/g, ' ').replace(/(\d[.,])\s+(?=\d{2}\b)/g, '$1').trim();
       const adjustmentMatch = line.match(adjustmentLabel);
       const totalMatch = !adjustmentMatch && line.match(totalLabel);
       if (adjustmentMatch || totalMatch) {
@@ -168,12 +171,15 @@
         itemCode = '';
         continue;
       }
-      const dairyMatch = dairy && line.match(dairyRow);
+      const dairyMatch = dairy && line.replace(/[\s\\|"'<>]+$/, '').match(dairyRow);
       if (dairyMatch) {
-        const [, codigo, , nombre, pcs, total_linea] = dairyMatch;
-        products.push({ nombre, codigo, piezas_facturadas: pcs, total_linea,
-          unidades_vendibles_totales: /\b\d+\s*\/\s*C\b/i.test(nombre) ? null : pcs });
-        continue;
+        const [, codigo, description, pcs, total_linea] = dairyMatch;
+        const nombre = description.replace(/^(?:(?:\d+(?!\d|\/)|[_~=\/|.·—–-]+)\s*)+/, '').trim();
+        if (/[a-záéíóú]{3}/i.test(nombre)) {
+          products.push({ nombre, codigo, piezas_facturadas: pcs, total_linea,
+            unidades_vendibles_totales: /\b\d+\s*\/\s*C\b/i.test(nombre) ? null : pcs });
+          continue;
+        }
       }
       const table = line.match(tableRow);
       const simple = line.match(textRow);
@@ -200,7 +206,7 @@
     return Math.ceil((Number(cost) / Number(quantity) / (1 - margin / 100) - 1e-9) * 100) / 100;
   }
 
-  const invoice = { normalize, parseText, suggestedPrice, moneyCents, reconcile, preferReading };
+  const invoice = { normalize, parseText, suggestedPrice, moneyCents, reconcile, preferReading, isDairyInvoice };
   if (typeof module === 'object') module.exports = invoice;
   else window.PorcentoFactura = invoice;
 })();
