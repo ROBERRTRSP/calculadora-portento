@@ -1,1 +1,154 @@
-<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#123b32"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="Porcento"><link rel="manifest" href="./manifest.webmanifest"><title>Porcento - Calculadora</title><style>*{box-sizing:border-box}html,body{margin:0;font-family:system-ui,sans-serif;background:#f2f6f3;color:#153c32}body{padding:5px}main{max-width:520px;margin:auto}h1{font-size:21px;margin:1px 0}p{font-size:12px;margin:2px 0 5px}section{background:white;padding:7px 11px;border-radius:11px;margin:5px 0;box-shadow:0 1px 5px #0001}label{display:block;font-size:12px;font-weight:650;margin:4px 0 2px}input{width:100%;height:34px;padding:4px 8px;font-size:17px;border:1px solid #9caea5;border-radius:7px}.row{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #eee;font-size:14px}.row:last-child{border:0}.price{font-size:19px;color:#087a51;font-weight:750}small{font-size:10px;color:#566b60}main>small{display:block;line-height:1.2}#custom{background:#e4f5eb}#custom .row{padding:4px 0}@media(max-height:740px){h1{font-size:18px}section{padding:5px 9px;margin:4px 0}input{height:30px;font-size:16px}.row{padding:4px 0}.price{font-size:17px}label{margin:2px 0 1px}}#custom{background:#e4f5eb;border-radius:7px;padding:5px;margin-top:5px}.mini{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:3px;text-align:center;font-size:11px}.mini span{display:flex;flex-direction:column}.mini b{font-size:16px;color:#087a51}.row{padding:3px 0}.price{font-size:16px}h1{font-size:17px}p{display:none}section{margin:3px 0;padding:5px 9px}label{margin:2px 0 1px}input{height:31px}main>small{font-size:9px}</style></head><body><main><h1>🧮 Porcento</h1><div style="margin:5px 0"><a href="./comparador.html" style="display:inline-block;background:#173a65;color:white;padding:9px 13px;border-radius:9px;font-weight:700;text-decoration:none;font-size:14px;margin-right:4px">▥ Comparar precios</a><a href="./scanner.html" style="display:inline-block;background:#126b4c;color:white;padding:9px 13px;border-radius:9px;font-weight:700;text-decoration:none;font-size:14px">📷 Escanear factura</a></div><p>Calculadora de precios para tu tienda</p><section><label>Costo de la caja ($)</label><input id="cost" type="number" inputmode="decimal" min="0" step=".01" value="48"><label>Unidades en la caja</label><input id="qty" type="number" inputmode="numeric" min="1" step="1" value="24"><label>Tu precio de venta ($) — opcional</label><input id="sale" type="number" inputmode="decimal" min="0" step=".01" placeholder="Ej. 3.50"><div id="custom" hidden></div></section><section><div class="row"><strong>Costo por unidad</strong><strong id="unit"></strong></div><div id="suggestions"></div></section><small>Los porcentajes son márgenes sobre el precio de venta. Ganancia bruta antes de gastos e impuestos.</small></main><script>const $=x=>document.getElementById(x),money=x=>x.toLocaleString('en-US',{style:'currency',currency:'USD'});function calc(){let c=+$('cost').value,q=+$('qty').value,u=c/q;if(!Number.isFinite(u)||q<=0||c<0){$('unit').textContent='—';$('suggestions').innerHTML='';$('custom').hidden=true;return}$('unit').textContent=money(u);$('suggestions').innerHTML=[33,45,50].map(m=>{let p=Math.ceil((u/(1-m/100)-1e-10)*100)/100;return '<div class="row"><span><b>Margen '+m+'%</b><br><small>Ganas '+money(p-u)+' por unidad</small></span><span class="price">'+money(p)+'</span></div>'}).join('');let v=$('sale').value,p=+v,box=$('custom');box.hidden=v===''||p<=0;if(!box.hidden)box.innerHTML='<div class="mini"><span>Margen <b>'+((p-u)/p*100).toFixed(1)+'%</b></span><span>Unidad <b>'+money(p-u)+'</b></span><span>Caja <b>'+money((p-u)*q)+'</b></span></div>'}['cost','qty','sale'].forEach(x=>$(x).addEventListener('input',calc));calc();if('serviceWorker'in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(()=>{}));</script></body></html>
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#f2f2f7">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Porcento">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="stylesheet" href="./porcento.css">
+  <title>Porcento</title>
+  <style>
+    .calculator-header { min-height: 44px; margin-bottom: 6px; }
+    .calculator-header button { padding-inline: 8px; }
+    .unit { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: baseline; border-bottom: 1px solid var(--hairline); padding-bottom: 7px; }
+    .unit h2 { font-size: 15px; }
+    .unit .amount { font-size: 21px; }
+    .margin-heading { margin: 8px 0 5px; }
+    .margins, .sale-results { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
+    .margins > div, .sale-results > div { min-width: 0; }
+    .margins > div { background: var(--tint); border-radius: 11px; padding: 6px 5px; text-align: center; }
+    .margins .amount { color: var(--accent); display: block; font-size: clamp(18px, 4.7vw, 24px); letter-spacing: -.045em; }
+    .margin-label { color: var(--accent); font-size: 12px; font-weight: 680; }
+    .profit-label { display: block; }
+    .sale-results { border-top: 1px solid var(--hairline); margin-top: 8px; padding-top: 7px; }
+    .sale-results strong { display: block; }
+    .tools { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .tools a { min-width: 0; background: var(--surface); border: 1px solid var(--hairline); }
+    @media (max-width: 350px) { .tools a { gap: 4px; padding-inline: 6px; font-size: 13px; } }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header class="page-header calculator-header">
+      <h1>Porcento</h1>
+      <button class="quiet" id="reset" type="button">Limpiar</button>
+    </header>
+
+    <form class="card" id="calculator">
+      <div class="fields">
+        <div class="field">
+          <label for="cost">Costo de compra</label>
+          <div class="money-input">
+            <span aria-hidden="true">$</span>
+            <input id="cost" type="number" inputmode="decimal" min="0" step=".01" placeholder="0.00" autocomplete="off" enterkeyhint="next">
+          </div>
+        </div>
+        <div class="field">
+          <label for="qty">Unidades <small>(opcional)</small></label>
+          <input id="qty" type="number" inputmode="numeric" min="1" step="1" placeholder="1" autocomplete="off" enterkeyhint="next">
+        </div>
+      </div>
+      <div class="field">
+        <label for="sale">Tu precio por unidad <small>(opcional)</small></label>
+        <div class="money-input">
+          <span aria-hidden="true">$</span>
+          <input id="sale" type="number" inputmode="decimal" min="0" step=".01" placeholder="0.00" autocomplete="off" enterkeyhint="done">
+        </div>
+      </div>
+      <p class="status" id="inputStatus" role="status"></p>
+    </form>
+
+    <section class="card" aria-labelledby="unit-heading">
+      <div class="unit">
+        <h2 id="unit-heading">Costo por unidad</h2>
+        <strong class="amount" id="unit">—</strong>
+      </div>
+      <h2 class="caption margin-heading">Precio de venta por margen</h2>
+      <div class="margins" id="suggestions">
+        <div><span class="margin-label">33%</span><strong class="amount">—</strong><small class="profit-label" hidden></small></div>
+        <div><span class="margin-label">45%</span><strong class="amount">—</strong><small class="profit-label" hidden></small></div>
+        <div><span class="margin-label">50%</span><strong class="amount">—</strong><small class="profit-label" hidden></small></div>
+      </div>
+      <div class="sale-results" id="custom" hidden>
+        <div><small>Margen bruto</small><strong class="amount" id="saleMargin"></strong></div>
+        <div><small>Ganancia por unidad</small><strong class="amount" id="saleProfit"></strong></div>
+        <div><small>Ganancia total</small><strong class="amount" id="totalProfit"></strong></div>
+      </div>
+    </section>
+
+    <nav class="tools" aria-label="Herramientas">
+      <a class="button" href="./comparador.html">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7V4h4m10 0h4v3M3 17v3h4m10 0h4v-3M7 8v8m3-8v8m4-8v8m3-8v8"/></svg>
+        Comparar precios
+      </a>
+      <a class="button" href="./scanner.html">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2V3Zm3 5h6m-6 4h6"/></svg>
+        Leer factura
+      </a>
+    </nav>
+  </main>
+
+  <script>
+    const $ = id => document.getElementById(id);
+    const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
+    const form = $('calculator');
+    const cost = $('cost'), quantity = $('qty'), sale = $('sale');
+    const margins = [33, 45, 50];
+    const suggestions = [...$('suggestions').children];
+
+    function showAmount(id, text, negative) {
+      $(id).textContent = text;
+      $(id).classList.toggle('negative', negative);
+    }
+
+    function calculate() {
+      const units = quantity.value === '' ? 1 : quantity.valueAsNumber;
+      const validUnits = !quantity.validity.badInput && Number.isInteger(units) && units > 0;
+      const purchase = cost.valueAsNumber;
+      const unit = purchase / units;
+      const validCost = Number.isFinite(unit) && purchase >= 0 && validUnits;
+      $('inputStatus').textContent = !validUnits ? 'Escribe una cantidad entera mayor que cero.'
+        : purchase < 0 ? 'El costo debe ser de $0 o más.' : '';
+      $('unit').textContent = validCost ? money.format(unit) : '—';
+
+      margins.forEach((margin, index) => {
+        const [, amount, profit] = suggestions[index].children;
+        const price = Math.ceil((unit / (1 - margin / 100) - 1e-10) * 100) / 100;
+        amount.textContent = validCost ? money.format(price) : '—';
+        profit.hidden = !validCost;
+        profit.textContent = validCost ? money.format(price - unit) + ' ganancia' : '';
+      });
+
+      const price = sale.valueAsNumber;
+      $('custom').hidden = !(validCost && price > 0);
+      if (!$('custom').hidden) {
+        const profit = price - unit;
+        showAmount('saleMargin', (profit / price * 100).toFixed(1) + '%', profit < 0);
+        showAmount('saleProfit', money.format(profit), profit < 0);
+        showAmount('totalProfit', money.format(profit * units), profit < 0);
+      }
+    }
+
+    form.addEventListener('input', calculate);
+    form.addEventListener('submit', event => event.preventDefault());
+    for (const [current, next] of [[cost, quantity], [quantity, sale], [sale, null]]) {
+      current.addEventListener('keydown', event => {
+        if (event.key !== 'Enter') return;
+        event.preventDefault();
+        if (next) next.focus();
+        else current.blur();
+      });
+    }
+    $('reset').addEventListener('click', () => {
+      form.reset();
+      calculate();
+    });
+    calculate();
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(() => {}));
+    }
+  </script>
+</body>
+</html>
