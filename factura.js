@@ -58,7 +58,7 @@
 
   function unitsFromDescription(name) {
     // Weight/volume lookalikes from receipts such as 16.9OZ -> 16.902.
-    const clean = name.replace(/0Z\b/gi, 'oz');
+    const clean = name.replace(/0Z\b/gi, 'oz').replace(/(?<=\d)9r\b/gi, 'gr');
     const patterns = [
       /\b(\d{1,4})\s*[-/]\s*\d+(?:[.,]\d+)?\s*(?:fl\s*oz|oz|ml|gr|g|gal|lt|l|lb|ct|pk|sticks?|drops?)\b/i,
       /\b(\d{1,4})\s*[x/]\s*1\s*$/i,
@@ -109,31 +109,41 @@
     return { rows, totals };
   }
 
-  function isDairyInvoice(text) {
-    return /\bJER[A-Z]{2,4}\s+DA[I1]RY\b|ADDS\s*\/\s*CUTS[^\n]*DESCRIPTION|CASE\s*\/\s*UN[I1T]+[^\n]*\bPCS\b/i.test(text);
+  function detectFormat(text) {
+    if (/\bJER[A-Z]{2,4}\s+DA[I1]RY\b|ADDS\s*\/\s*CUTS[^\n]*DESCRIPTION|CASE\s*\/\s*UN[I1T]+[^\n]*\bPCS\b/i.test(text)) return 'dairy';
+    if (/\bAAA[\s.]+WHOLESALE\b/i.test(text) || (text.match(/^[\s'"]*[IlTt]tem\s*No\s*[.:]+\s*\d{4,8}/gim) || []).length >= 2) return 'aaa';
+    if (/\bTA[IÍ1L]NO\s+(?:TRADING|TRAD)|\bUPC\b[^\n]*\b(?:QUANTITY|QTY|PRICE EACH)\b/i.test(text)) return 'taino';
+    if (/\bROSAS\s+A\b|\bPRODUCTO[S]?\s+CANT(?:IDAD)?\.?\s+PRECIO\s+TOTAL\b/i.test(text)) return 'rosas';
+    return '';
   }
 
-  function parseText(text, { dairy = isDairyInvoice(text) } = {}) {
+  function parseText(text, { dairy, format = dairy === true ? 'dairy' : detectFormat(text) } = {}) {
     const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
     const recent = [];
     const products = [];
+    const quantity = format === 'taino' ? '[0-9]+|[ilI]' : '[0-9]+';
     const textRow = new RegExp('^\\s*\\d{1,4}\\s+(.+?)\\s+(\\d+)\\s*(ca(?:ja)?s?|cs|cases?|un(?:d|id(?:ades)?)?)\\s+' + money + '(?:\\s+' + money + ')?[|\\s]*$', 'i');
-    const tableRow = new RegExp('^([0-9]{6,14})[|.\\s]+(.+?)\\s+(\\d+)\\s+' + money + '(?:[|\\s]+' + money + ')?[|\\s]*$', 'i');
-    const receiptPrice = new RegExp('^(\\d+)\\s*(cases?|cs(?:-\\d+)?|bx|box|bags?|bg|dz|pk(?:-\\d+)?|pack|each|ea)\\s*@\\s*' + money + '(?:[|\\s]+' + money + ')?[|\\s]*$', 'i');
-    const dairyRow = new RegExp('^[^\\w]*([0-9]{3,6})[.,:;)]?\\s+(.*?)\\s+(\\d+)\\s+' + money + '[|\\s]*$');
+    const tableRow = new RegExp('^([0-9]{6,14})[|.\\s]+(.+?)\\s+(' + quantity + ')\\s+' + money + '(?:[|\\s]+' + money + ')?[|\\s]*$', 'i');
+    const receiptPrice = new RegExp('^(\\d+)\\s*(cases?|cs(?:-\\d+)?|bx|box|bags?|bg|dz|pk(?:-\\d+)?|pack|each|ea)\\s*' + (format === 'aaa' ? '[@&©]' : '@') + '\\s*' + money + '(?:\\s+' + money + ')?[|\\s]*$', 'i');
+    const dairyRow = new RegExp('^[^\\w]*([0-9]{3,6})[.,:;)]?\\s+(.*?)\\s+(\\d+)\\s+' + money + '$');
     const amountOnly = new RegExp('^' + money + '$');
-    const totalLabel = /^(invoice total|total this inv[o0][i1l]c[e3]|total factura|total neto|grand total|sub\s*total(?:\s+de\s+productos)?|total)\b[\s:/~|]*(.*)$/i;
+    const totalLabel = /^(inv[o0][i1l]c[e3]\s+total|total this inv[o0][i1l]c[e3]|total (?:de la )?factura|total neto|grand total|net total|sub\s*total(?:\s+de\s+productos)?|total)\b[\s:/~|]*(.*)$/i;
     const adjustmentLabel = /^(sales tax|total tax|tax|impuesto(?:s)?|itbis|shipping(?: fee)?|freight|flete|env[ií]o|deposit(?: fee)?|dep[oó]sito|service fee|recargo|discount|descuento)\b\s*[:/]*\s*(.*)$/i;
     const adjustments = [];
     let subtotal = null, total = null, genericTotal = null, itemCode = '';
     for (let index = 0; index < lines.length; index++) {
       const rawLine = lines[index];
       const line = rawLine.replace(/^[|\s]+/,'').replace(/\s*\|\s*/g, ' ').replace(/(\d[.,])\s+(?=\d{2}\b)/g, '$1').trim();
+      const trimmed = line.replace(/^[\s"'«»~]+|[\s\\|"'<>]+$/g, '');
       const adjustmentMatch = line.match(adjustmentLabel);
-      const totalMatch = !adjustmentMatch && line.match(totalLabel);
+      const totalMatch = !adjustmentMatch && trimmed.match(totalLabel);
       if (adjustmentMatch || totalMatch) {
         const [, label, tail] = adjustmentMatch || totalMatch;
-        const match = (tail || lines[index + 1] || '').match(amountOnly);
+        let totalText = tail || lines[index + 1] || '';
+        if (totalMatch && format === 'dairy') {
+          totalText = totalText.replace(/^([0-9]{1,7})\s*[-:;]\s*(\d{2})$/, '$1.$2');
+        }
+        const match = totalText.match(amountOnly);
         if (match) {
           if (!tail) index++;
           const value = match[1];
@@ -144,13 +154,15 @@
         }
         continue;
       }
-      const item = line.match(/^[IlTt]tem\s*(?:no\.?)?\s*[:.;]*\s*(\d{4,8})\s*$/i);
+      const item = trimmed.match(format === 'aaa'
+        ? /^[IlTt]tem\s*(?:no\.?)?\s*[:.;]*\s*(\d{4,8})\b/i
+        : /^[IlTt]tem\s*(?:no\.?)?\s*[:.;]*\s*(\d{4,8})\s*$/i);
       if (item) {
         itemCode = item[1];
         recent.length = 0;
         continue;
       }
-      const bill = line.match(receiptPrice);
+      const bill = trimmed.match(receiptPrice);
       if (bill && recent.length) {
         const [, purchased, type, price, lineTotal] = bill;
         const name = recent.at(-1);
@@ -171,7 +183,8 @@
         itemCode = '';
         continue;
       }
-      const dairyMatch = dairy && line.replace(/[\s\\|"'<>]+$/, '').replace(/(\d)[;:](?=\d{2}$)/, '$1.').match(dairyRow);
+      const dairyText = trimmed.replace(/(\d)[;:](?=\d{2}$)/, '$1.').replace(/(?<=\d[.,]\d{2})\s+[A-Z?]+$/i, '');
+      const dairyMatch = format === 'dairy' && dairyText.match(dairyRow);
       if (dairyMatch) {
         const [, codigo, description, pcs, total_linea] = dairyMatch;
         const nombre = description.replace(/^(?:(?:\d+(?!\d|\/|\s*(?:OZ|QT)\b)|[_~=\/|.·—–-]+)\s*)+/i, '').trim();
@@ -181,16 +194,22 @@
           continue;
         }
       }
-      const table = line.match(tableRow);
-      const simple = line.match(textRow);
+      const table = trimmed.match(tableRow);
+      const rosas = format === 'rosas' ? parseRosasRow(trimmed) : null;
+      if (rosas) {
+        products.push(rosas);
+        continue;
+      }
+      const simple = trimmed.match(textRow);
       if (table || simple) {
         const [, first, second, third, price, lineTotal] = (table || simple);
         const nombre = table ? second : first;
-        const purchased = table ? third : second;
+        const printedQuantity = table ? third : second;
+        const purchased = /^[il]$/i.test(printedQuantity) && lineTotal && moneyCents(price) === moneyCents(lineTotal) ? 1 : printedQuantity;
         const pack = simple && /^un/i.test(third) ? 1 : unitsFromDescription(nombre);
         if (/[a-záéíóú]{3}/i.test(nombre)) products.push({
           nombre, codigo: table ? first : '', cantidad_comprada: purchased, unidades_por_empaque: pack,
-          precio_empaque: price, total_linea: lineTotal, confianza: lineTotal ? 'alta' : 'media',
+          precio_empaque: price, total_linea: lineTotal, confianza: lineTotal && purchased === printedQuantity ? 'alta' : 'media',
           observacion: /\b\d+\s*x\s*1\s*$/i.test(nombre) ? 'Confirma que la indicación x1 corresponde al empaque.' : ''
         });
         continue;
@@ -199,6 +218,20 @@
       if (recent.length > 2) recent.shift();
     }
     return normalize({ productos: products, subtotal_productos: subtotal, total_factura: total ?? genericTotal, ajustes: adjustments });
+  }
+
+  function parseRosasRow(line) {
+    const row = line.match(/^(?:\d{1,3}|[+]|[lI][ce]?)\s+(.+?)\s+(?:(\d+)\s*([c¢][aá]|caja|un)|([ilto]{1,3})\s*[c¢][aá])\s+(.+)$/i);
+    if (!row) return null;
+    const [, nombre, quantity, unit, ambiguousQuantity, tail] = row;
+    if (!/[a-záéíóú]{3}/i.test(nombre)) return null;
+    const prices = [...tail.matchAll(new RegExp(money, 'g'))].map(match => match[1]);
+    if (prices.length !== 2) return null;
+    const samePrice = moneyCents(prices[0]) === moneyCents(prices[1]);
+    const cantidad_comprada = quantity ?? (ambiguousQuantity && samePrice ? 1 : null);
+    return { nombre, cantidad_comprada, unidades_por_empaque: /^un$/i.test(unit ?? '') ? 1 : unitsFromDescription(nombre),
+      precio_empaque: prices[0], total_linea: prices[1], confianza: ambiguousQuantity ? 'media' : 'alta',
+      observacion: ambiguousQuantity ? 'Confirma la cantidad de cajas.' : '' };
   }
 
   function suggestedPrice(cost, quantity, margin) {
@@ -214,7 +247,8 @@
     return Number.isFinite(unitPriceInCents) ? Math.max(0, Math.ceil(unitPriceInCents - 1e-9)) / 100 : null;
   }
 
-  const invoice = { normalize, parseText, suggestedPrice, priceWithMarkup, moneyCents, reconcile, preferReading, isDairyInvoice };
+  const invoice = { normalize, parseText, suggestedPrice, priceWithMarkup, moneyCents, reconcile, preferReading, detectFormat,
+    isDairyInvoice: text => detectFormat(text) === 'dairy' };
   if (typeof module === 'object') module.exports = invoice;
   else window.PorcentoFactura = invoice;
 })();

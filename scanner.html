@@ -64,8 +64,11 @@
           <select id="invoiceFormat">
             <option value="">Detectar automáticamente</option>
             <option value="dairy">Jersey Dairy Express</option>
+            <option value="aaa">AAA Wholesale</option>
+            <option value="taino">Taíno Trading</option>
+            <option value="rosas">Rosas Distribution</option>
           </select>
-          <small class="caption">Fotografía la tabla de productos de cerca. Si el total quedó fuera, añade una foto del total de la misma factura.</small>
+          <small class="caption" id="formatHint">Incluye los encabezados de la tabla y los importes. Si el total quedó fuera, añade una foto del total de la misma factura.</small>
           <button id="takeTotalPhoto" type="button">Tomar foto del total</button>
           <button class="quiet" id="removeTotalPhoto" type="button" hidden>Quitar foto del total</button>
           <input id="totalPhotoFile" type="file" accept="image/*" capture="environment" hidden>
@@ -109,7 +112,7 @@
       </div>
     </details>
   </main>
-  <script src="./factura.js?v=15"></script>
+  <script src="./factura.js?v=16"></script>
   <script>
 const $ = id => document.getElementById(id);
 const money = n => Number.isFinite(n) ? '$' + n.toFixed(2) : '—';
@@ -432,6 +435,17 @@ function readingIsVerified(result) {
   return invoice.reconcile(result.rows, result.totals).verified;
 }
 
+const formatHints = {
+  dairy: 'Incluye ITEM, DESCRIPTION, PCS y AMOUNT. Fotografía la línea Total This Invoice si quedó fuera.',
+  aaa: 'Incluye el número de artículo, su descripción y el renglón con la cantidad y el importe de cada producto.',
+  taino: 'Incluye desde la columna UPC hasta Amount. Fotografía Invoice Total si quedó fuera.',
+  rosas: 'Incluye las columnas Producto, Cant, Precio y Total. Fotografía Total Neto si quedó fuera.'
+};
+const defaultFormatHint = $('formatHint').textContent;
+$('invoiceFormat').onchange = () => {
+  $('formatHint').textContent = formatHints[$('invoiceFormat').value] ?? defaultFormatHint;
+};
+
 let selectedFile = null;
 let selectedTotalPhoto = null;
 
@@ -561,7 +575,7 @@ $('read').onclick = () => withInvoice(async canvas => {
   $('status').textContent = 'Leyendo los productos…';
   const Tesseract = window.Tesseract;
   const worker = await Tesseract.createWorker('eng+spa');
-  const forceDairy = $('invoiceFormat').value === 'dairy';
+  const selectedFormat = $('invoiceFormat').value;
   const setMode = mode => worker.setParameters({ tessedit_pageseg_mode: mode, preserve_interword_spaces: '1' });
   const recognize = async image => (await worker.recognize(image)).data.text;
   const notes = [canvas.dataset.note];
@@ -571,12 +585,13 @@ $('read').onclick = () => withInvoice(async canvas => {
   try {
     await setMode(Tesseract.PSM.SINGLE_BLOCK);
     const firstText = await recognize(canvas);
-    const dairy = forceDairy || invoice.isDairyInvoice(firstText);
-    const parse = (input, dairyHint = dairy) => invoice.parseText(input, dairyHint ? { dairy: true } : undefined);
+    let format = selectedFormat || invoice.detectFormat(firstText);
+    const parse = input => invoice.parseText(input, { format: format || undefined });
     const firstTotal = parse(firstText).totals.total;
     const consider = (input, footer = separateTotals) => {
       const next = parse(input);
       const tableTotal = next.totals.total ?? firstTotal;
+      next.totals.total = tableTotal;
       if (footer) {
         if (footer.total !== null && tableTotal !== null && tableTotal !== footer.total) {
           next.totals.conflictingTotal = true;
@@ -615,19 +630,37 @@ $('read').onclick = () => withInvoice(async canvas => {
         consider(focused);
         if (!readingIsVerified(result) && !selectedTotalPhoto) {
           const table = await recognize(ocrRegion(canvas, .07, .61));
-          let footer = parse(await recognize(ocrRegion(canvas, .53, .97))).totals;
-          const dairyLayout = dairy || invoice.isDairyInvoice(table);
-          if (dairyLayout && footer.total === null) {
+          format ||= invoice.detectFormat(table);
+          const footerRegions = { rosas: [.31, .49, .45, 1], taino: [.73, .98, .45, 1], aaa: [.70, 1, .28, .82] };
+          const footerRegion = footerRegions[format] ?? [.53, .97, .09, 1];
+          let footer = parse(await recognize(ocrRegion(canvas, ...footerRegion))).totals;
+          if (format === 'dairy' && footer.total === null) {
             await setMode(Tesseract.PSM.SPARSE_TEXT);
-            const focusedTotal = parse(await recognize(ocrRegion(canvas, .55, .70, .49, .84, 3))).totals;
+            const focusedTotal = parse(await recognize(ocrRegion(canvas, .44, .76, .49, 1, 3))).totals;
             if (focusedTotal.total !== null) footer = focusedTotal;
             await setMode(Tesseract.PSM.SINGLE_BLOCK);
           }
           consider(firstText, footer);
           consider(table, footer);
-          if (!readingIsVerified(result) && dairyLayout) {
-            const detail = await recognize(ocrRegion(canvas, .20, .40, .11, .79));
-            consider((dairy ? '' : 'JERSEY DAIRY\n') + detail, footer);
+          if (format && !readingIsVerified(result)) {
+            $('status').textContent = 'Ajustando la lectura al formato de la factura…';
+            const regions = {
+              dairy: [.04, .45, .11, 1],
+              aaa: [.12, .88, .29, .75],
+              taino: [.28, .67, 0, 1],
+              rosas: [.23, .40, 0, 1]
+            };
+            const detail = await recognize(ocrRegion(canvas, ...regions[format]));
+            consider(detail, footer);
+          }
+          if (!readingIsVerified(result) && format && footer.total === null && footerRegions[format]) {
+            await setMode(Tesseract.PSM.SPARSE_TEXT);
+            const alternate = parse(await recognize(ocrRegion(canvas, .40, 1, 0, 1))).totals;
+            if (alternate.total !== null) {
+              const checked = { rows: result.rows, totals: { ...result.totals, total: alternate.total } };
+              if (result.totals.total === null) result = checked;
+              else if (result.totals.total !== null && result.totals.total !== alternate.total) result.totals.conflictingTotal = true;
+            }
           }
         }
       } catch {
@@ -643,7 +676,7 @@ $('read').onclick = () => withInvoice(async canvas => {
   }
 });
 $('parse').onclick = () => {
-  const result = invoice.parseText($('raw').value, $('invoiceFormat').value === 'dairy' ? { dairy: true } : undefined);
+  const result = invoice.parseText($('raw').value, { format: $('invoiceFormat').value || undefined });
   if (totals) {
     result.totals.partial ||= totals.partial;
     result.totals.conflictingTotal ||= totals.conflictingTotal;
