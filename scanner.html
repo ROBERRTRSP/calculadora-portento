@@ -34,10 +34,14 @@
     .invoice-prices .amount { display: block; color: var(--accent); }
     .invoice-markup { margin-top: 6px; padding: 7px 8px; display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
     .invoice-markup .amount { color: var(--accent); }
-    .invoice-options { display: flex; align-items: center; gap: 9px; min-height: 44px; margin: 4px 0 0; }
-    .invoice-options input { appearance: auto; width: 20px; height: 20px; min-height: 0; margin: 0; accent-color: var(--accent); }
     .invoice-warning { margin: 7px 0; color: var(--negative); }
     #raw { min-height: 100px; resize: vertical; }
+    .nrs-compare { margin: 8px 0; padding: 9px; background: var(--field); border-radius: 11px; }
+    .nrs-compare[data-below="true"] { background: #fce9e8; color: var(--negative); }
+    .nrs-compare p { font-size: 13px; line-height: 1.5; }
+    .nrs-compare strong { display: block; margin-bottom: 3px; }
+    #pricebookFile { margin-bottom: 9px; padding: 7px; font-size: 14px; }
+    #pricebook p { margin-top: 6px; }
   </style>
 </head>
 <body>
@@ -54,8 +58,7 @@
       <input id="file" type="file" accept="image/*,application/pdf" hidden>
       <p id="selectedInvoice" class="caption" role="status"></p>
       <div class="actions invoice-actions">
-        <button id="ai" type="button">Leer con IA</button>
-        <button id="read" type="button">Lector básico</button>
+        <button class="primary" id="read" type="button">Leer factura gratis</button>
       </div>
       <details class="invoice-disclosure" id="basicOptions">
         <summary>Ayudar al lector básico</summary>
@@ -75,19 +78,20 @@
           <p id="totalPhotoStatus" class="status" role="status"></p>
         </div>
       </details>
-      <label class="invoice-options"><input type="checkbox" id="smallPrint"> IA con ampliaciones para tickets largos o letra pequeña</label>
       <p id="status" class="status" role="status"></p>
       <img id="preview" hidden alt="Vista previa de la factura">
-      <details class="invoice-disclosure" id="connection">
-        <summary>Ajustes de conexión con IA</summary>
-        <div class="details-body">
-          <label for="endpoint">Dirección del servidor</label>
-          <input id="endpoint" type="url" inputmode="url" autocapitalize="none" spellcheck="false">
-          <button id="saveEndpoint" type="button">Guardar dirección</button>
-          <small class="caption">Al usar IA, se envía la imagen al servidor configurado y al proveedor de IA.</small>
-        </div>
-      </details>
     </section>
+    <details class="card" id="pricebook">
+      <summary>Comparar con My NRS Store</summary>
+      <div class="details-body">
+        <label for="pricebookFile">Pricebook de NRS (.xlsx, .xls o .csv)</label>
+        <input id="pricebookFile" type="file" accept=".xlsx,.xls,.csv">
+        <label for="targetMargin">Meta de margen bruto (%)</label>
+        <input id="targetMargin" type="number" inputmode="decimal" min="0" max="99.99" step=".01" required value="40">
+        <p id="pricebookStatus" class="status" role="status"></p>
+        <p class="caption">Los archivos se procesan en este dispositivo.</p>
+      </div>
+    </details>
     <section class="card" aria-labelledby="products-heading">
       <h2 id="products-heading">Productos</h2>
       <p id="invoiceSummary" class="status" aria-live="polite"></p>
@@ -112,40 +116,105 @@
       </div>
     </details>
   </main>
-  <script src="./factura.js?v=17"></script>
+  <script src="./factura.js?v=18"></script>
+  <script src="./pricebook.js?v=18"></script>
   <script>
 const $ = id => document.getElementById(id);
 const money = n => Number.isFinite(n) ? '$' + n.toFixed(2) : '—';
-const DEFAULT_AI_ENDPOINT = 'https://porcento-ia.riverminimarket2.workers.dev';
-const ENDPOINT_KEY = 'porcento_ai_endpoint';
 let rows = [];
+const pricebook = window.PorcentoPricebook;
+const targetInput = $('targetMargin');
+let catalog = null;
+let catalogImport = 0;
 try {
-  $('endpoint').value = localStorage.getItem(ENDPOINT_KEY) || DEFAULT_AI_ENDPOINT;
-} catch {
-  $('endpoint').value = DEFAULT_AI_ENDPOINT;
+  const saved = localStorage.getItem('porcento-meta-margen');
+  if (saved !== null && Number.isFinite(Number(saved)) && Number(saved) >= 0 && Number(saved) < 100) targetInput.value = saved;
+} catch { /* The target still works without storage. */ }
+
+function targetMargin() {
+  const target = targetInput.valueAsNumber;
+  return targetInput.validity.valid && Number.isFinite(target) ? target : null;
 }
-$('saveEndpoint').onclick = () => {
-  const endpoint = $('endpoint').value.trim() || DEFAULT_AI_ENDPOINT;
-  if (!validEndpoint(endpoint)) {
-    $('status').textContent = 'Escribe una dirección válida que comience con https://.';
-    return;
-  }
-  $('endpoint').value = endpoint;
+
+targetInput.addEventListener('input', () => {
+  const target = targetMargin();
+  targetInput.setAttribute('aria-invalid', String(target === null));
   try {
-    localStorage.setItem(ENDPOINT_KEY, endpoint);
-    $('status').textContent = 'Dirección guardada.';
-  } catch {
-    $('status').textContent = 'La dirección estará disponible mientras mantengas esta página abierta.';
+    if (target !== null) localStorage.setItem('porcento-meta-margen', String(target));
+  } catch { /* The target still works without storage. */ }
+  recalc();
+});
+
+$('pricebookFile').onchange = async event => {
+  const file = event.target.files[0];
+  const request = ++catalogImport;
+  if (!file) return;
+  catalog = null;
+  recalc();
+  $('pricebookStatus').textContent = 'Leyendo el Pricebook…';
+  try {
+    await loadScript('https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js');
+    const data = await file.arrayBuffer();
+    const XLSX = window.XLSX;
+    const workbook = XLSX.read(data, { raw: true, cellHTML: false, cellFormula: false });
+    let imported = null;
+    for (const name of workbook.SheetNames) {
+      const sheet = XLSX.utils.sheet_to_json(workbook.Sheets[name], { header: 1, defval: '', blankrows: false, raw: false });
+      const candidate = pricebook.readSheet(sheet);
+      if (candidate && (!imported || candidate.items.length > imported.items.length)) imported = candidate;
+    }
+    if (request !== catalogImport) return;
+    if (!imported?.items.length) throw Error('El archivo no tiene filas con nombre y precio válidos. Descarga de nuevo el Pricebook desde el portal de NRS.');
+    catalog = pricebook.indexPricebook(imported.items);
+    $('pricebookStatus').textContent = imported.items.length + ' productos del Pricebook cargados.' +
+      (imported.skipped ? ' Filas sin precio válido: ' + imported.skipped + '.' : '');
+  } catch (error) {
+    if (request !== catalogImport) return;
+    $('pricebookStatus').textContent = error.message || 'No pude abrir el Pricebook.';
   }
+  recalc();
 };
 
-function validEndpoint(endpoint) {
-  try {
-    const url = new URL(endpoint);
-    return url.protocol === 'https:' && !url.username && !url.password;
-  } catch {
-    return false;
+function updatePricebookCard(card, row, pendingInvoice) {
+  const target = targetMargin();
+  const value = pricebook.compare(row, catalog, target ?? NaN);
+  const cost = card.querySelector('[data-nrs-cost]');
+  const details = card.querySelector('[data-nrs-details]');
+  const title = card.querySelector('[data-nrs-title]');
+  const section = card.querySelector('[data-nrs-section]');
+  cost.textContent = value.cost === null ? 'Costo unitario nuevo: —'
+    : 'Costo unitario nuevo: ' + money(value.cost / 100) + (pendingInvoice || row.review || row.costUnconfirmed ? ' · provisional' : '');
+  title.textContent = '';
+  details.textContent = '';
+  section.dataset.below = 'false';
+  if (!catalog) return;
+  if (!value.match) {
+    title.textContent = 'Pendiente de confirmar';
+    details.textContent = 'Verifica el UPC o el nombre exacto en NRS.';
+    return;
   }
+  const { item, via } = value.match;
+  const price = 'Venta en NRS: ' + money(value.sale / 100) + '/unidad' +
+    (item.quantity > 1 ? ' (' + item.quantity + ' por ' + money(item.cents / 100) + ')' : '') + '.';
+  const identity = via + ' · ' + [item.name, item.size].filter(Boolean).join(' ');
+  if (pendingInvoice || value.margin === null) {
+    title.textContent = 'Pendiente de confirmar';
+    details.textContent = identity + '. ' + price + ' ' + (item.needsReview
+      ? 'Revisa la venta por peso o los impuestos y cargos incluidos.'
+      : 'Revisa el costo, las unidades y el total de la factura.');
+    return;
+  }
+  if (target === null) {
+    title.textContent = 'Escribe una meta entre 0% y 99.99%';
+    details.textContent = identity + '. ' + price;
+    return;
+  }
+  section.dataset.below = String(value.below);
+  title.textContent = value.below ? 'Revisar precio' : 'Margen en meta';
+  const displayMargin = value.below && Number(value.margin.toFixed(2)) >= target
+    ? Math.floor(value.margin * 100) / 100 : value.margin;
+  details.textContent = identity + '. ' + price + ' Margen bruto: ' + displayMargin.toFixed(2) +
+    '%. Precio sugerido para ' + target + '%: ' + money(value.suggested / 100) + '.';
 }
 function draw() {
   const items = $('items');
@@ -169,9 +238,11 @@ function draw() {
         if (mode === 'numeric') input.min = '1';
         input.step = mode === 'decimal' ? '.01' : '1';
       }
-      input.value = row[name];
+      input.value = row[name] ?? '';
+      if (name === 'codigo') input.inputMode = 'numeric';
       input.addEventListener('input', () => {
         row[name] = input.value;
+        if (name === 'codigo') row.codigoTipo = '';
         recalc();
       });
       const caption = document.createElement('label');
@@ -202,7 +273,8 @@ function draw() {
       cell.append(label, amount);
       prices.append(cell);
     }
-    product.append(heading, fields);
+    const codeField = field('codigo', row.codigoTipo === 'interno' ? 'Código del proveedor (puedes poner el UPC)' : 'UPC o código de barras', '');
+    product.append(heading, fields, codeField);
     if (row.info) {
       const info = document.createElement('p');
       info.className = 'caption';
@@ -238,7 +310,17 @@ function draw() {
     markupAmount.className = 'amount';
     markupAmount.dataset.markup = '50';
     markup.append(markupLabel, markupAmount);
-    product.append(prices, markup);
+    const comparison = document.createElement('div');
+    comparison.className = 'nrs-compare';
+    comparison.dataset.nrsSection = '';
+    const cost = document.createElement('p');
+    cost.dataset.nrsCost = '';
+    const title = document.createElement('strong');
+    title.dataset.nrsTitle = '';
+    const details = document.createElement('p');
+    details.dataset.nrsDetails = '';
+    comparison.append(cost, title, details);
+    product.append(comparison, prices, markup);
     items.append(product);
   });
   recalc();
@@ -249,6 +331,7 @@ function recalc() {
   [...$('items').children].forEach((product, index) => {
     const row = rows[index];
     const pending = row.review || (check && !check.verified);
+    updatePricebookCard(product, row, Boolean(check && !check.verified));
     for (const amount of product.querySelectorAll('[data-margin]')) {
       const margin = Number(amount.dataset.margin);
       const price = pending ? null : invoice.suggestedPrice(row.costo, row.cantidad, margin);
@@ -301,6 +384,15 @@ function updateInvoiceSummary(check) {
     ...documentNotes
   ].filter(Boolean).join(' ') : '';
   $('export').disabled = !rows.length || Boolean(check && !check.verified);
+  if (catalog && rows.length) {
+    const target = targetMargin();
+    const comparisons = rows.map(row => pricebook.compare(row, catalog, check && !check.verified ? NaN : target ?? NaN));
+    const below = comparisons.filter(row => row.below).length;
+    const pending = comparisons.filter(row => !row.match || row.margin === null || Boolean(check && !check.verified)).length;
+    const review = target === null ? 'Escribe la meta de margen en la sección de NRS.'
+      : 'NRS: ' + below + ' precios por revisar y ' + pending + ' pendientes de confirmar.';
+    summary.textContent += (summary.textContent ? ' ' : '') + review;
+  }
 }
 
 $('printedTotalEntry').onsubmit = event => {
@@ -332,44 +424,49 @@ function loadScript(url) {
   return scripts.get(url);
 }
 
+const pdfBase = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@5.4.624/legacy/build/';
+let pdfLibrary;
+const isPdf = file => file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
+
+async function openPdf(file) {
+  pdfLibrary ??= import(pdfBase + 'pdf.min.mjs').catch(error => {
+    pdfLibrary = null;
+    throw error;
+  });
+  const pdf = await pdfLibrary;
+  pdf.GlobalWorkerOptions.workerSrc = pdfBase + 'pdf.worker.min.mjs';
+  return pdf.getDocument({ data: await file.arrayBuffer(), isEvalSupported: false }).promise;
+}
+
+async function pdfPageCanvas(page) {
+  const canvas = document.createElement('canvas');
+  const natural = page.getViewport({ scale: 1 });
+  const viewport = page.getViewport({ scale: Math.min(3, 2800 / Math.max(natural.width, natural.height)) });
+  canvas.width = Math.round(viewport.width);
+  canvas.height = Math.round(viewport.height);
+  try {
+    const text = await page.getTextContent();
+    canvas.invoiceWords = text.items.flatMap(item => {
+      if (!item.str?.trim() || !item.transform || item.width <= 0 || item.height <= 0) return [];
+      const [x, baseline] = viewport.convertToViewportPoint(item.transform[4], item.transform[5]);
+      const height = item.height * viewport.scale;
+      return [...item.str.matchAll(/\S+/g)].map(term => ({
+        text: term[0], x: x + item.width * viewport.scale * term.index / item.str.length,
+        y: baseline - height, width: item.width * viewport.scale * term[0].length / item.str.length, height
+      }));
+    });
+  } catch { /* A scanned page can still be rendered for OCR. */ }
+  // Render lazily so a PDF with readable text needs neither rendering nor OCR.
+  canvas.renderPdf = async () => {
+    await page.render({ canvas, viewport }).promise;
+    delete canvas.renderPdf;
+  };
+  return canvas;
+}
+
 async function readCanvas(file) {
   const canvas = document.createElement('canvas');
   const context = canvas.getContext('2d');
-  if (file.type === 'application/pdf' || /\.pdf$/i.test(file.name)) {
-    await loadScript('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js');
-    window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-    const doc = await window.pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
-    try {
-      if (doc.numPages > 1) canvas.dataset.note = 'Se leyó la primera página del PDF.';
-      const page = await doc.getPage(1);
-      const natural = page.getViewport({ scale: 1 });
-      const viewport = page.getViewport({ scale: Math.min(3, 3000 / Math.max(natural.width, natural.height)) });
-      if (doc.numPages === 1) {
-        try {
-          const text = await page.getTextContent();
-          canvas.invoiceWords = text.items.flatMap(item => {
-            if (!item.str?.trim() || !item.transform || item.width <= 0 || item.height <= 0) return [];
-            const [x, baseline] = viewport.convertToViewportPoint(item.transform[4], item.transform[5]);
-            const height = item.height * viewport.scale;
-            const terms = [...item.str.matchAll(/\S+/g)];
-            return terms.map(term => ({
-              text: term[0], x: x + item.width * viewport.scale * term.index / item.str.length,
-              y: baseline - height, width: item.width * viewport.scale * term[0].length / item.str.length, height
-            }));
-          });
-        } catch {
-          // The rendered page is still available for OCR.
-        }
-      }
-      canvas.width = Math.round(viewport.width);
-      canvas.height = Math.round(viewport.height);
-      await page.render({ canvasContext: context, viewport }).promise;
-    } finally {
-      await doc.destroy();
-    }
-    return canvas;
-  }
-
   const image = new Image();
   const url = URL.createObjectURL(file);
   try {
@@ -386,30 +483,6 @@ async function readCanvas(file) {
   } finally {
     URL.revokeObjectURL(url);
   }
-}
-
-function detailsOf(canvas, quality = .86) {
-  const sections = 3;
-  const height = Math.ceil(canvas.height * 0.39);
-  return Array.from({ length: sections }, (_, index) => {
-    const offset = Math.round((canvas.height - height) * index / (sections - 1));
-    const crop = document.createElement('canvas');
-    const zoom = Math.min(1.6, 2000 / canvas.width);
-    crop.width = Math.round(canvas.width * zoom);
-    crop.height = Math.round(height * zoom);
-    crop.getContext('2d').drawImage(canvas, 0, offset, canvas.width, height, 0, 0, crop.width, crop.height);
-    return crop.toDataURL('image/jpeg', quality);
-  });
-}
-
-function contrastOf(canvas) {
-  const adjusted = document.createElement('canvas');
-  adjusted.width = canvas.width;
-  adjusted.height = canvas.height;
-  const context = adjusted.getContext('2d');
-  context.filter = 'grayscale(100%) contrast(165%)';
-  context.drawImage(canvas, 0, 0);
-  return adjusted;
 }
 
 function ocrRegion(source, top, bottom, start = .09, end = .91, magnify = 2) {
@@ -505,8 +578,7 @@ for (const id of ['cameraFile', 'file']) {
     $('preview').hidden = true;
     $('preview').removeAttribute('src');
     $('status').textContent = '';
-    const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
-    $('selectedInvoice').textContent = isPdf ? 'PDF listo para leer.' : 'Foto lista para leer.';
+    $('selectedInvoice').textContent = isPdf(file) ? 'PDF listo para leer.' : 'Foto lista para leer.';
   };
 }
 
@@ -515,11 +587,11 @@ async function withInvoice(read) {
     $('status').textContent = 'Toma una foto de la factura o elige una ya guardada.';
     return;
   }
-  const controls = ['takePhoto', 'chooseFile', 'takeTotalPhoto', 'removeTotalPhoto', 'invoiceFormat', 'ai', 'read', 'parse'].map($);
+  const controls = ['takePhoto', 'chooseFile', 'takeTotalPhoto', 'removeTotalPhoto', 'invoiceFormat', 'read', 'parse'].map($);
   controls.forEach(button => { button.disabled = true; });
   try {
     $('status').textContent = 'Preparando factura…';
-    await read(await readCanvas(selectedFile));
+    await read(selectedFile);
   } catch (error) {
     $('status').textContent = error.message || 'No se pudo leer la factura.';
   } finally {
@@ -534,184 +606,178 @@ function preview(canvas) {
   return image;
 }
 
-async function readWithAI(endpoint, image, details, retry = false) {
-  const body = JSON.stringify({ image, details, relectura: retry });
-  if (body.length >= 8_900_000) throw Error('La foto es muy pesada. Prueba una foto más ligera.');
-  const response = await fetch(endpoint, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
-    signal: AbortSignal.timeout(retry ? 65000 : 90000)
-  });
-  const data = await response.json().catch(() => null);
-  if (response.status === 503 && typeof data?.error === 'string' && data.error.includes('OPENAI_API_KEY')) {
-    throw Error('Falta configurar OPENAI_API_KEY en Cloudflare. Puedes usar Lector básico.');
-  }
-  if (data?.setup_required === true || (response.status === 502 && typeof data?.detail === 'string' && /(?:incorrect|invalid) api key/i.test(data.detail))) {
-    throw Error('OpenAI rechazó la clave del servidor. Actualiza OPENAI_API_KEY en Cloudflare. En Ayudar al lector básico puedes elegir el formato y añadir una foto del total.');
-  }
-  if (response.status === 422) return { productos: [], lectura_parcial: true };
-  if (!response.ok || !Array.isArray(data?.productos)) throw Error(data?.error || 'No se completó la lectura con IA. Puedes usar el lector básico.');
-  return data;
-}
-
-$('ai').onclick = () => {
-  const endpoint = $('endpoint').value.trim() || DEFAULT_AI_ENDPOINT;
-  if (!validEndpoint(endpoint)) {
-    $('connection').open = true;
-    $('endpoint').focus();
-    $('status').textContent = 'Escribe una dirección válida que comience con https://.';
-    return;
-  }
-  return withInvoice(async canvas => {
-    const image = preview(canvas);
-    const useDetails = $('smallPrint').checked;
-    $('status').textContent = 'Leyendo los productos y sus importes…';
-    let data = await readWithAI(endpoint, image, useDetails ? detailsOf(canvas) : []);
-    let result = invoice.normalize(data);
-    const notes = [];
-    if (!readingIsVerified(result)) {
-      $('status').textContent = 'Verificando de nuevo los renglones y el total con ampliaciones…';
-      try {
-        const source = useDetails ? contrastOf(canvas) : canvas;
-        const reviewed = await readWithAI(endpoint, image, detailsOf(source, .8), true);
-        const candidate = invoice.normalize(reviewed);
-        if (invoice.preferReading(result, candidate)) {
-          result = candidate;
-          data = reviewed;
-        }
-      } catch {
-        notes.push('No se pudo completar la segunda lectura.');
-      }
-    }
-    result.totals.partial ||= Boolean(canvas.dataset.note);
-    displayInvoice(result, [canvas.dataset.note, ...notes, ...(Array.isArray(data.observaciones) ? data.observaciones : [])]);
-  });
-};
-
-$('read').onclick = () => withInvoice(async canvas => {
-  preview(canvas);
+async function scanPage(canvas, getWorker, totalPhoto) {
   const selectedFormat = $('invoiceFormat').value;
   const embedded = invoice.readEmbeddedInvoice(canvas.invoiceWords, selectedFormat);
-  if (embedded && readingIsVerified(embedded.reading) && !selectedTotalPhoto) {
-    $('raw').value = embedded.text;
-    displayInvoice(embedded.reading);
-    return;
+  if (embedded && !totalPhoto && (readingIsVerified(embedded.reading) || (canvas.pdfMultiple && embedded.reading.rows.length > 0))) {
+    return { ...embedded, notes: [] };
   }
-  await loadScript('https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js');
+  if (canvas.renderPdf) await canvas.renderPdf();
+  if ($('preview').hidden) preview(canvas);
   $('status').textContent = 'Leyendo los productos…';
+  const worker = await getWorker();
   const Tesseract = window.Tesseract;
-  const worker = await Tesseract.createWorker('eng+spa');
   const setMode = mode => worker.setParameters({ tessedit_pageseg_mode: mode, preserve_interword_spaces: '1' });
   const recognize = async image => (await worker.recognize(image)).data.text;
-  const notes = [canvas.dataset.note];
+  const notes = [];
   let result = null;
   let text = '';
   let separateTotals = null;
-  try {
-    await setMode(Tesseract.PSM.SINGLE_BLOCK);
-    const firstScan = (await worker.recognize(canvas, {}, { text: true, tsv: true })).data;
-    const firstText = firstScan.text;
-    let format = selectedFormat || invoice.detectFormat(firstText);
-    const parse = input => invoice.parseText(input, { format: format || undefined });
-    const firstTotal = parse(firstText).totals.total;
-    const consider = (input, footer = separateTotals, words = []) => {
-      let next = parse(input);
-      if (words.length) {
-        const table = invoice.readEmbeddedInvoice(words, format);
-        const combined = table.reading;
-        combined.totals.subtotal ??= next.totals.subtotal;
-        combined.totals.total ??= next.totals.total;
-        combined.totals.foreignCurrency ||= next.totals.foreignCurrency;
-        if (!combined.totals.adjustments.length) combined.totals.adjustments = next.totals.adjustments;
-        next = combined.rows.length ? combined : next;
-        if (next === combined) input = table.text;
+  await setMode(Tesseract.PSM.SINGLE_BLOCK);
+  const firstScan = (await worker.recognize(canvas, {}, { text: true, tsv: true })).data;
+  const firstText = firstScan.text;
+  let format = selectedFormat || invoice.detectFormat(firstText);
+  const parse = input => invoice.parseText(input, { format: format || undefined });
+  const firstTotal = parse(firstText).totals.total;
+  const consider = (input, footer = separateTotals, words = []) => {
+    let next = parse(input);
+    if (words.length) {
+      const table = invoice.readEmbeddedInvoice(words, format);
+      const combined = table.reading;
+      combined.totals.subtotal ??= next.totals.subtotal;
+      combined.totals.total ??= next.totals.total;
+      combined.totals.foreignCurrency ||= next.totals.foreignCurrency;
+      if (!combined.totals.adjustments.length) combined.totals.adjustments = next.totals.adjustments;
+      next = combined.rows.length ? combined : next;
+      if (next === combined) input = table.text;
+    }
+    const tableTotal = next.totals.total ?? firstTotal;
+    next.totals.total = tableTotal;
+    if (footer) {
+      next.totals.foreignCurrency ||= footer.foreignCurrency;
+      if (footer.total !== null && tableTotal !== null && tableTotal !== footer.total) {
+        next.totals.conflictingTotal = true;
       }
-      const tableTotal = next.totals.total ?? firstTotal;
-      next.totals.total = tableTotal;
-      if (footer) {
-        next.totals.foreignCurrency ||= footer.foreignCurrency;
-        if (footer.total !== null && tableTotal !== null && tableTotal !== footer.total) {
-          next.totals.conflictingTotal = true;
-        }
-        next.totals.total = footer.total ?? next.totals.total;
-        next.totals.subtotal ??= footer.subtotal;
-        if (!next.totals.adjustments.length) next.totals.adjustments = footer.adjustments;
-      }
-      if (!result || invoice.preferReading(result, next)) {
-        result = next;
-        text = input;
-      }
-    };
+      next.totals.total = footer.total ?? next.totals.total;
+      next.totals.subtotal ??= footer.subtotal;
+      if (!next.totals.adjustments.length) next.totals.adjustments = footer.adjustments;
+    }
+    if (!result || invoice.preferReading(result, next)) {
+      result = next;
+      text = input;
+    }
+  };
 
-    if (selectedTotalPhoto) {
-      $('status').textContent = 'Leyendo la foto del total…';
-      try {
-        const footerCanvas = await readCanvas(selectedTotalPhoto);
-        await setMode(Tesseract.PSM.SPARSE_TEXT);
-        separateTotals = parse(await recognize(ocrRegion(footerCanvas, 0, 1, 0, 1, 2))).totals;
-        if (separateTotals.total === null) {
-          await setMode(Tesseract.PSM.SINGLE_BLOCK);
-          separateTotals = parse(await recognize(footerCanvas)).totals;
-        }
-        if (separateTotals.total === null) notes.push('La foto del total no mostró un importe con la etiqueta Total. Puedes escribirlo abajo.');
-      } catch {
-        notes.push('No se pudo leer la segunda foto. Puedes escribir el total abajo.');
-      }
-    }
-    consider(firstText);
-    if (!readingIsVerified(result)) consider(firstText, separateTotals, invoice.tsvWords(firstScan.tsv));
-    if (embedded) consider(embedded.text, separateTotals, canvas.invoiceWords);
-    if (!readingIsVerified(result)) {
-      $('status').textContent = 'Ampliando la tabla y revisando los importes…';
-      try {
+  if (totalPhoto) {
+    $('status').textContent = 'Leyendo la foto del total…';
+    try {
+      const footerCanvas = await readCanvas(totalPhoto);
+      await setMode(Tesseract.PSM.SPARSE_TEXT);
+      separateTotals = parse(await recognize(ocrRegion(footerCanvas, 0, 1, 0, 1, 2))).totals;
+      if (separateTotals.total === null) {
         await setMode(Tesseract.PSM.SINGLE_BLOCK);
-        const focused = (await worker.recognize(ocrRegion(canvas, 0, 1, 0, 1, 2), {}, { text: true, tsv: true })).data;
-        consider(focused.text);
-        if (!readingIsVerified(result)) consider(focused.text, separateTotals, invoice.tsvWords(focused.tsv));
-        if (!readingIsVerified(result) && !selectedTotalPhoto) {
-          const table = await recognize(ocrRegion(canvas, .07, .61));
-          format ||= invoice.detectFormat(table);
-          const footerRegions = { rosas: [.31, .49, .45, 1], taino: [.73, .98, .45, 1], aaa: [.70, 1, .28, .82] };
-          const footerRegion = footerRegions[format] ?? [.53, .97, .09, 1];
-          let footer = parse(await recognize(ocrRegion(canvas, ...footerRegion))).totals;
-          if (format === 'dairy' && footer.total === null) {
-            await setMode(Tesseract.PSM.SPARSE_TEXT);
-            const focusedTotal = parse(await recognize(ocrRegion(canvas, .44, .76, .49, 1, 3))).totals;
-            if (focusedTotal.total !== null) footer = focusedTotal;
-            await setMode(Tesseract.PSM.SINGLE_BLOCK);
-          }
-          consider(firstText, footer);
-          consider(table, footer);
-          if (format && !readingIsVerified(result)) {
-            $('status').textContent = 'Ajustando la lectura al formato de la factura…';
-            const regions = {
-              dairy: [.04, .45, .11, 1],
-              aaa: [.12, .88, .29, .75],
-              taino: [.28, .67, 0, 1],
-              rosas: [.23, .40, 0, 1]
-            };
-            const detail = await recognize(ocrRegion(canvas, ...regions[format]));
-            consider(detail, footer);
-          }
-          if (!readingIsVerified(result) && format && footer.total === null && footerRegions[format]) {
-            await setMode(Tesseract.PSM.SPARSE_TEXT);
-            const alternate = parse(await recognize(ocrRegion(canvas, .40, 1, 0, 1))).totals;
-            if (alternate.total !== null) {
-              const checked = { rows: result.rows, totals: { ...result.totals, total: alternate.total } };
-              if (result.totals.total === null) result = checked;
-              else if (result.totals.total !== null && result.totals.total !== alternate.total) result.totals.conflictingTotal = true;
-            }
+        separateTotals = parse(await recognize(footerCanvas)).totals;
+      }
+      if (separateTotals.total === null) notes.push('La foto del total no mostró un importe con la etiqueta Total. Puedes escribirlo abajo.');
+    } catch {
+      notes.push('No se pudo leer la segunda foto. Puedes escribir el total abajo.');
+    }
+  }
+  consider(firstText);
+  if (!readingIsVerified(result)) consider(firstText, separateTotals, invoice.tsvWords(firstScan.tsv));
+  if (embedded) consider(embedded.text, separateTotals, canvas.invoiceWords);
+  if (!readingIsVerified(result)) {
+    $('status').textContent = 'Ampliando la tabla y revisando los importes…';
+    try {
+      await setMode(Tesseract.PSM.SINGLE_BLOCK);
+      const focused = (await worker.recognize(ocrRegion(canvas, 0, 1, 0, 1, 2), {}, { text: true, tsv: true })).data;
+      consider(focused.text);
+      if (!readingIsVerified(result)) consider(focused.text, separateTotals, invoice.tsvWords(focused.tsv));
+      if (!readingIsVerified(result) && !totalPhoto) {
+        const table = await recognize(ocrRegion(canvas, .07, .61));
+        format ||= invoice.detectFormat(table);
+        const footerRegions = { rosas: [.31, .49, .45, 1], taino: [.73, .98, .45, 1], aaa: [.70, 1, .28, .82] };
+        const footerRegion = footerRegions[format] ?? [.53, .97, .09, 1];
+        let footer = parse(await recognize(ocrRegion(canvas, ...footerRegion))).totals;
+        if (format === 'dairy' && footer.total === null) {
+          await setMode(Tesseract.PSM.SPARSE_TEXT);
+          const focusedTotal = parse(await recognize(ocrRegion(canvas, .44, .76, .49, 1, 3))).totals;
+          if (focusedTotal.total !== null) footer = focusedTotal;
+          await setMode(Tesseract.PSM.SINGLE_BLOCK);
+        }
+        consider(firstText, footer);
+        consider(table, footer);
+        if (format && !readingIsVerified(result)) {
+          $('status').textContent = 'Ajustando la lectura al formato de la factura…';
+          const regions = {
+            dairy: [.04, .45, .11, 1],
+            aaa: [.12, .88, .29, .75],
+            taino: [.28, .67, 0, 1],
+            rosas: [.23, .40, 0, 1]
+          };
+          const detail = await recognize(ocrRegion(canvas, ...regions[format]));
+          consider(detail, footer);
+        }
+        if (!readingIsVerified(result) && format && footer.total === null && footerRegions[format]) {
+          await setMode(Tesseract.PSM.SPARSE_TEXT);
+          const alternate = parse(await recognize(ocrRegion(canvas, .40, 1, 0, 1))).totals;
+          if (alternate.total !== null) {
+            const checked = { rows: result.rows, totals: { ...result.totals, total: alternate.total } };
+            if (result.totals.total === null) result = checked;
+            else if (result.totals.total !== null && result.totals.total !== alternate.total) result.totals.conflictingTotal = true;
           }
         }
-      } catch {
-        notes.push('La relectura se interrumpió. Revisa los renglones recuperados.');
       }
+    } catch {
+      notes.push('La relectura se interrumpió. Revisa los renglones recuperados.');
     }
-    $('raw').value = text;
-    result.totals.partial ||= Boolean(canvas.dataset.note);
-    displayInvoice(result, notes);
+  }
+  return { text, reading: result, notes };
+}
+
+function combinePdfPages(pages) {
+  const readings = pages.map(page => page.reading);
+  const products = readings.flatMap(reading => reading.rows);
+  const final = readings.at(-1).totals;
+  const firstTotal = readings.find(reading => reading.totals.total !== null)?.totals.total ?? null;
+  const printedTotals = new Set(readings.map(reading => reading.totals.total).filter(total => total !== null));
+  return {
+    rows: products,
+    totals: {
+      ...final,
+      total: final.total ?? firstTotal,
+      partial: readings.some(reading => reading.totals.partial || (!reading.rows.length && reading.totals.total === null)),
+      foreignCurrency: readings.some(reading => reading.totals.foreignCurrency),
+      conflictingTotal: printedTotals.size > 1 || readings.some(reading => reading.totals.conflictingTotal)
+    }
+  };
+}
+
+$('read').onclick = () => withInvoice(async file => {
+  let worker;
+  const getWorker = async () => {
+    if (!worker) {
+      await loadScript('https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js');
+      worker = await window.Tesseract.createWorker('eng+spa');
+    }
+    return worker;
+  };
+  let documentPdf;
+  try {
+    const pages = [];
+    if (isPdf(file)) {
+      documentPdf = await openPdf(file);
+      for (let number = 1; number <= documentPdf.numPages; number++) {
+        $('status').textContent = 'Leyendo página ' + number + ' de ' + documentPdf.numPages + '…';
+        const page = await documentPdf.getPage(number);
+        const canvas = await pdfPageCanvas(page);
+        canvas.pdfMultiple = documentPdf.numPages > 1;
+        pages.push(await scanPage(canvas, getWorker, number === documentPdf.numPages ? selectedTotalPhoto : null));
+        page.cleanup();
+      }
+    } else {
+      pages.push(await scanPage(await readCanvas(file), getWorker, selectedTotalPhoto));
+    }
+    const result = pages.length === 1 ? pages[0].reading : combinePdfPages(pages);
+    $('raw').value = pages.map(page => page.text).join('\n');
+    displayInvoice(result, pages.flatMap(page => page.notes));
     if (!readingIsVerified(result)) $('basicOptions').open = true;
   } finally {
-    await worker.terminate();
+    try {
+      if (worker) await worker.terminate();
+    } finally {
+      if (documentPdf) await documentPdf.destroy();
+    }
   }
 });
 $('parse').onclick = () => {
@@ -738,12 +804,21 @@ $('export').onclick = () => {
     return '"' + text.replace(/"/g, '""') + '"';
   };
   const lines = [['Producto', 'Costo total', 'Unidades', 'Costo por unidad', '33%', '45%', '50%', 'Por revisar', 'Precio con costo +50%']];
+  if (catalog) lines[0].push('Coincidencia NRS', 'Precio actual NRS por unidad', 'Margen bruto actual %', 'Precio sugerido para la meta', 'Revisión de precio');
   for (const row of rows) {
     const prices = margins.map(margin => row.review ? null : invoice.suggestedPrice(row.costo, row.cantidad, margin));
     const markup = row.review ? null : invoice.priceWithMarkup(row.costo, row.cantidad);
-    lines.push([row.nombre, row.costo, row.cantidad,
+    const values = [row.nombre, row.costo, row.cantidad,
       prices[0] === null ? '' : Number(row.costo) / Number(row.cantidad), ...prices,
-      row.warning || (row.review ? 'Revisar' : ''), markup === null ? '' : markup.toFixed(2)]);
+      row.warning || (row.review ? 'Revisar' : ''), markup === null ? '' : markup.toFixed(2)];
+    if (catalog) {
+      const target = targetMargin();
+      const result = pricebook.compare(row, catalog, target ?? NaN);
+      values.push(result.match?.via ?? '', result.sale === null ? '' : (result.sale / 100).toFixed(4),
+        result.margin === null ? '' : result.margin.toFixed(2), result.suggested === null ? '' : (result.suggested / 100).toFixed(2),
+        result.margin === null ? 'Pendiente de confirmar' : target === null ? 'Meta pendiente' : result.below ? 'Revisar precio' : 'Margen en meta');
+    }
+    lines.push(values);
   }
   const csv = lines.map(line => line.map(quote).join(',')).join('\r\n');
   const download = document.createElement('a');

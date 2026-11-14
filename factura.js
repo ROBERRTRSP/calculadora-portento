@@ -62,7 +62,7 @@
     const patterns = [
       /\b(\d{1,4})\s*[-/]\s*\d+(?:[.,]\d+)?\s*(?:fl\s*oz|oz|ml|gr|g|gal|lt|l|lb|ct|pk|sticks?|drops?)\b/i,
       /\b(\d{1,4})\s*[x/]\s*1\s*$/i,
-      /\b(?:case|caja|pack)\s*(\d{1,4})\b/i
+      /\b(?:case|caja|pack)\s*(?:of|de|x|:)?\s*(\d{1,4})\b/i
     ];
     for (const pattern of patterns) {
       const match = clean.match(pattern);
@@ -93,9 +93,11 @@
       if (line === null) warnings.push('Confirma el importe impreso de la línea.');
       if (raw.confianza === 'baja') warnings.push('Lectura dudosa.');
       if (typeof raw.observacion === 'string' && raw.observacion.trim()) warnings.push(raw.observacion.trim().slice(0, 260));
-      const parts = [packages && pack && pack > 1 ? packages + ' × ' + pack : '', raw.codigo && /^\d{4,14}$/.test(String(raw.codigo)) ? 'Código ' + raw.codigo : ''].filter(Boolean);
+      const codigo = String(raw.codigo ?? '').trim();
+      const parts = [packages && pack && pack > 1 ? packages + ' × ' + pack : ''].filter(Boolean);
       return {
-        nombre, costo: cost === null ? '' : (cost / 100).toFixed(2), cantidad: quantity || '',
+        nombre, codigo, codigoTipo: raw.codigo_tipo || '',
+        costo: cost === null ? '' : (cost / 100).toFixed(2), cantidad: quantity || '',
         costUnconfirmed: line === null,
         info: parts.join(' · '), warning: warnings.join(' '), review: warnings.length > 0 || raw.confianza === 'media'
       };
@@ -173,7 +175,7 @@
         const ambiguousEach = typeIsExplicitUnit && /\b\d{1,4}\s*[-/]\s*\d/.test(name);
         if (/[a-záéíóú]{3}/i.test(name) && !/\b(?:address|subtotal|amount|credit cards|market|change|invoice)\b/i.test(name)) {
           products.push({
-            nombre: name, codigo: itemCode, cantidad_comprada: purchased,
+            nombre: name, codigo: itemCode, codigo_tipo: 'interno', cantidad_comprada: purchased,
             unidades_por_empaque: retailBundle || ambiguousEach ? null : dozens ?? mappedSize ?? (typeIsExplicitUnit ? 1 : null),
             precio_empaque: price, total_linea: lineTotal,
             confianza: lineTotal ? 'alta' : 'media'
@@ -189,7 +191,7 @@
         const [, codigo, description, pcs, total_linea] = dairyMatch;
         const nombre = description.replace(/^(?:(?:\d+(?!\d|\/|\s*(?:OZ|QT)\b)|[_~=\/|.·—–-]+)\s*)+/i, '').trim();
         if (/[a-záéíóú]{3}/i.test(nombre)) {
-          products.push({ nombre, codigo, piezas_facturadas: pcs, total_linea,
+          products.push({ nombre, codigo, codigo_tipo: 'interno', piezas_facturadas: pcs, total_linea,
             unidades_vendibles_totales: /\b\d+\s*\/\s*C\b/i.test(nombre) ? null : pcs });
           continue;
         }
@@ -346,7 +348,7 @@
       const discountMatches = qty !== null && unitPrice !== null && discount !== null &&
         qty * unitPrice - Math.abs(discount) === cost;
       previous = {
-        nombre: description, codigo: values.code?.join(''),
+        nombre: description, codigo: values.code?.join(''), codigo_tipo: format === 'dairy' || format === 'aaa' ? 'interno' : '',
         cantidad_comprada: qty,
         unidades_por_empaque: pack ?? (confirmPack ? null : 1),
         precio_empaque: unitPrice === null || discountMatches ? null : unitPrice / 100,
