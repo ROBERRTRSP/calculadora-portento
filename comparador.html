@@ -1,88 +1,173 @@
-<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Comparador UPC · Porcento</title><meta name="theme-color" content="#f5f7f6"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="default"><style>
-:root{color-scheme:light;--ink:#18231f;--muted:#77817b;--line:#e9ece9;--accent:#17684d;--bg:#fafbfa}
-*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-html{-webkit-text-size-adjust:100%}
-body{margin:0;padding:calc(env(safe-area-inset-top) + 24px) 20px calc(env(safe-area-inset-bottom) + 38px);font:16px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;background:var(--bg);color:var(--ink)}
-main{max-width:600px;margin:auto}
-main>a:first-child{font-size:14px;font-weight:600;color:var(--accent);text-decoration:none}
-h1{font-size:clamp(27px,6vw,34px);line-height:1.14;letter-spacing:-1.2px;margin:28px 0 10px;font-weight:740}
-h1+p{color:var(--muted);font-size:15px;margin:0 0 27px;max-width:490px}
-section{background:#fff;border:1px solid #f0f1f0;border-radius:18px;padding:23px 20px;margin:14px 0;box-shadow:0 2px 10px rgba(20,35,25,.018)}
-section h3{font-size:18px;letter-spacing:-.45px;font-weight:680;margin:0 0 20px}
-label{display:block;font-size:13px;font-weight:650;margin:18px 0 7px;color:#424f48}
-input{width:100%;min-height:49px;border:1px solid #e4e8e5;border-radius:11px;background:#fff;padding:12px 13px;font:16px -apple-system,BlinkMacSystemFont,system-ui,sans-serif;color:var(--ink);outline:0;appearance:none}
-input:focus{border-color:#7fa995;box-shadow:0 0 0 3px rgba(23,104,77,.07)}
-input::placeholder{color:#adb5af}
-button{font:600 14px -apple-system,BlinkMacSystemFont,system-ui,sans-serif;padding:12px 15px;min-height:45px;border:0;border-radius:11px;background:#edf4ef;color:var(--accent);margin:10px 6px 4px 0;cursor:pointer;touch-action:manipulation}
-button:active{opacity:.75}
-#scan,#lookup{width:100%;margin:12px 0 3px;background:var(--accent);color:#fff}
-#stop{width:100%}
-#video,#qr-reader{width:100%;max-height:270px;background:#141414;border-radius:12px;overflow:hidden;margin-top:10px}
-#video[hidden],#qr-reader[hidden]{display:none}
-#status{font-size:13px;color:var(--muted);margin-top:8px}
-#status:empty{display:none}
-.row{display:flex;align-items:center;justify-content:space-between;gap:12px;border-bottom:1px solid var(--line);padding:12px 0;font-size:14px}
-.row:last-child{border-bottom:0}
-.value{font-weight:700;color:var(--accent);font-variant-numeric:tabular-nums}
-.warn{background:#f7f8f6;padding:13px 14px;border-radius:11px;color:#68756b;font-size:13px;line-height:1.5;margin:0 0 17px}
-.warn small{color:inherit}
-#links a{display:inline-block;color:var(--accent);text-decoration:none;font-weight:600;font-size:13px;margin:5px 12px 5px 0}
-#results{font-size:14px}.scan-actions{display:flex;flex-wrap:wrap;gap:5px}.scan-actions button{flex:1;min-width:125px;min-height:44px}#status{margin:8px 0;line-height:1.35;font-weight:600}#qr-reader{border-radius:9px;overflow:hidden}input{font-size:16px;min-height:44px}
-#saved,main>small:last-child{color:var(--muted);font-size:12px;line-height:1.6}
-main>small:last-child{display:block;padding:12px 2px 0}
-#clear{background:#f2f3f2;color:#65736b}
-@media(max-width:420px){body{padding-left:14px;padding-right:14px}section{padding:20px 17px}h1{margin-top:24px}}
-</style></head><body><main><a href="./index.html">← Porcento</a><h1>▥ Comparador de precios</h1><p>Escanea un UPC para identificar el artículo y comparar precios verificables.</p><section><label for="upc">Código de barras UPC / EAN</label><input id="upc" inputmode="numeric" autocomplete="off" placeholder="Escanea o escribe el código"><small style="display:block;margin:6px 0">Enfoca todas las barras, sin reflejos, a 10–20 cm de distancia.</small><div class="scan-actions"><button id="scan">📷 Escanear código</button><button id="photoButton" type="button">📸 Leer desde foto</button><button id="stop" type="button" hidden>✕ Cerrar cámara</button></div><input id="photo" type="file" accept="image/*" capture="environment" hidden><video id="video" playsinline muted hidden></video><div id="qr-reader" hidden style="width:100%;max-width:440px;margin:8px 0"></div><div id="status" role="status" aria-live="polite"></div><label for="name">Producto / presentación</label><input id="name" placeholder="Ej. Coca-Cola 20 oz"><button id="lookup">🔍 Buscar nombre y precios</button></section><section><h3>Tu compra y precio (opcionales)</h3><p class="warn">Después de buscar el producto, puedes indicar cuánto te costó y cuántas unidades compraste. Si agregas tu precio de venta, se compara con las tiendas.</p><label>Precio de compra ($) · opcional</label><input id="cost" type="number" min="0" step=".01" inputmode="decimal" placeholder="1.15"><label>Cantidad comprada (unidades) · opcional</label><input id="qty" type="number" min="1" step="1" inputmode="numeric" placeholder="Ej. 12"><small>Si dejas la cantidad vacía, el precio de compra se considera por 1 unidad.</small><label>Tu precio de venta por unidad ($) · opcional</label><input id="sale" type="number" min="0" step=".01" inputmode="decimal" placeholder="2.50"><div id="results"></div></section><section><h3>Comparar competencia</h3><p class="warn"><small>Porcento busca ofertas en Google Shopping mediante un servicio en la nube cuando está conectado. También muestra registros públicos y los precios que anotas. Confirma siempre el mismo UPC, tamaño, impuestos y envío; un resultado de búsqueda no garantiza coincidencia exacta.</small></p><div id="links"></div><h3 style="margin:18px 0 7px">Precios de menor a mayor</h3><div id="ranked" aria-live="polite"></div><div id="cloudStatus" class="warn" aria-live="polite">Escanea un producto para buscar ofertas en la nube.</div><div id="offers" aria-live="polite" style="margin:12px 0"><small>Escanea un código para consultar precios registrados públicamente.</small></div><label>Walmart ($)</label><input id="walmart" type="number" min="0" step=".01" inputmode="decimal"><label>Amazon ($)</label><input id="amazon" type="number" min="0" step=".01" inputmode="decimal"><label>Supermercado local ($)</label><input id="local" type="number" min="0" step=".01" inputmode="decimal"><label>Nombre del supermercado local</label><input id="localName" placeholder="Ej. supermercado de Paterson"><button id="save">Guardar comparación</button><button id="clear">Limpiar</button><div id="saved"></div></section><small>Las ofertas web provienen de Google Shopping cuando está activado el proveedor SerpApi en Cloudflare. El servidor guarda las consultas durante 24 horas para reducir el costo; los resultados no garantizan disponibilidad ni igualdad de UPC. También se muestran registros de Open Prices, que pueden ser antiguos. Tus costos y precios manuales quedan guardados en este navegador.</small></main><script>
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#f2f2f7">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <link rel="stylesheet" href="./porcento.css">
+  <title>Comparar precios · Porcento</title>
+  <style>
+    .scan-actions { margin-bottom: 9px; }
+    #lookup { align-self: end; }
+    #video, #qr-reader { width: 100%; max-height: 270px; background: #141414; border-radius: 12px; overflow: hidden; margin-top: 8px; }
+    #ranked:empty { display: none; }
+    .offer > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+    .offer > span:last-child { flex: none; max-width: 42%; text-align: right; }
+    .offer a { font-size: 13px; margin-top: 3px; }
+    #name { margin-top: 2px; }
+    .product-name { margin-top: 9px; }
+    .price-summary { color: var(--muted); font-size: 13px; margin-top: 4px; }
+    #links { display: flex; flex-wrap: wrap; gap: 7px 13px; margin-bottom: 12px; }
+    #links a { display: inline-flex; align-items: center; min-height: 35px; font-size: 13px; font-weight: 650; }
+    #results { margin-top: 4px; font-size: 14px; }
+    .manual-actions { margin-top: 12px; }
+    #manual-fields > .fields + .fields { margin-top: 9px; }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <a class="back" href="./index.html">‹ Porcento</a>
+    <header class="page-header"><h1>Comparar precios</h1></header>
+
+    <section class="card" aria-label="Buscar producto">
+      <div class="actions scan-actions">
+        <button class="primary" id="scan" type="button">Escanear código</button>
+        <button id="photoButton" type="button">Leer desde foto</button>
+        <button id="stop" type="button" hidden>Cerrar cámara</button>
+      </div>
+      <input id="photo" type="file" accept="image/*" capture="environment" hidden>
+      <video id="video" playsinline muted hidden></video>
+      <div id="qr-reader" hidden></div>
+      <div class="actions">
+        <div class="field">
+          <label for="upc">Código de barras</label>
+          <input id="upc" inputmode="numeric" autocomplete="off" placeholder="UPC / EAN" enterkeyhint="search">
+        </div>
+        <button id="lookup" type="button">Buscar</button>
+      </div>
+      <div class="field product-name" id="productField" hidden>
+        <label for="name">Producto</label>
+        <input id="name" placeholder="Ej. Coca-Cola 20 oz">
+      </div>
+      <p class="status" id="status" role="status"></p>
+    </section>
+
+    <section class="card" aria-labelledby="price-heading">
+      <h2 id="price-heading">Precios por tienda</h2>
+      <p class="price-summary">De menor a mayor</p>
+      <div id="ranked" aria-live="polite"></div>
+      <p id="cloudStatus" class="status" aria-live="polite">Escanea o escribe un código para ver precios.</p>
+      <p id="offers" class="status" aria-live="polite"></p>
+    </section>
+
+    <details class="card">
+      <summary>Mi costo y precio de venta</summary>
+      <div class="details-body">
+        <div class="fields">
+          <div class="field">
+            <label for="cost">Costo de compra ($)</label>
+            <input id="cost" type="number" min="0" step=".01" inputmode="decimal" placeholder="0.00">
+          </div>
+          <div class="field">
+            <label for="qty">Unidades <small>(opcional)</small></label>
+            <input id="qty" type="number" min="1" step="1" inputmode="numeric" placeholder="1">
+          </div>
+        </div>
+        <div class="field">
+          <label for="sale">Tu precio por unidad ($)</label>
+          <input id="sale" type="number" min="0" step=".01" inputmode="decimal" placeholder="0.00">
+        </div>
+        <div id="results"></div>
+      </div>
+    </details>
+
+    <details class="card">
+      <summary>Buscar en tiendas o anotar precios</summary>
+      <div class="details-body">
+        <div id="links"></div>
+        <div id="manual-fields">
+          <div class="fields">
+            <div class="field">
+              <label for="walmart">Walmart ($)</label>
+              <input id="walmart" type="number" min="0" step=".01" inputmode="decimal">
+            </div>
+            <div class="field">
+              <label for="amazon">Amazon ($)</label>
+              <input id="amazon" type="number" min="0" step=".01" inputmode="decimal">
+            </div>
+          </div>
+          <div class="fields">
+            <div class="field">
+              <label for="localName">Supermercado</label>
+              <input id="localName" placeholder="Nombre">
+            </div>
+            <div class="field">
+              <label for="local">Precio local ($)</label>
+              <input id="local" type="number" min="0" step=".01" inputmode="decimal">
+            </div>
+          </div>
+        </div>
+        <div class="actions manual-actions">
+          <button class="primary" id="save" type="button">Guardar comparación</button>
+          <button class="quiet" id="clear" type="button">Limpiar</button>
+        </div>
+        <p id="saved" class="status" role="status"></p>
+      </div>
+    </details>
+  </main>
+  <script>
 const $=id=>document.getElementById(id),usd=n=>'$'+n.toFixed(2);let stream=null,detector=null,raf=0,last='',html5scanner=null,scanning=false;const key=()=>'porcento_upc_'+$('upc').value.trim();let publicOffers=[],cloudOffers=[];function calc(){
 const purchase=Number($('cost').value),qty=Number($('qty').value),sale=Number($('sale').value),hasCost=$('cost').value!==''&&purchase>0,hasSale=$('sale').value!==''&&sale>0,unit=hasCost?(qty>0?purchase/qty:purchase):0;
-let h=hasCost?'<div class="row"><span>Costo por unidad</span><b>'+usd(unit)+'</b></div>'+[33,45,50].map(m=>'<div class="row"><span>Margen '+m+'%</span><b class="value">'+usd(Math.ceil(unit/(1-m/100)*100)/100)+'</b></div>').join(''):'<small>El costo es opcional: puedes comparar precios sin introducirlo.</small>';
+let h=hasCost?'<div class="row"><span>Costo por unidad</span><b>'+usd(unit)+'</b></div>'+[33,45,50].map(m=>'<div class="row"><span>Margen '+m+'%</span><b class="value">'+usd(Math.ceil(unit/(1-m/100)*100)/100)+'</b></div>').join(''):'';
 if(hasSale){h+='<div class="row"><span>Tu precio</span><b>'+usd(sale)+'</b></div>';if(hasCost)h+='<div class="row"><span>Ganancia bruta/unidad</span><b>'+usd(sale-unit)+'</b></div><div class="row"><span>Margen bruto</span><b>'+((sale-unit)/sale*100).toFixed(1)+'%</b></div>'}
 $('results').innerHTML=h;renderRanked()}
 function renderRanked(){
 let manual=[['Walmart','walmart'],['Amazon','amazon'],[$('localName').value.trim()||'Supermercado local','local']].filter(([name,id])=>$(id).value!==''&&Number($(id).value)>0).map(([name,id])=>({name,price:Number($(id).value),date:'Anotado por ti',manual:true}));
 let offers=cloudOffers.concat(publicOffers,manual).sort((a,b)=>a.price-b.price),box=$('ranked');box.replaceChildren();
-if(!offers.length){box.textContent='No hay precios registrados para este UPC. Consulta las tiendas o anota un precio verificado.';return}
+if(!offers.length)return;
 let sale=Number($('sale').value),hasSale=$('sale').value!==''&&sale>0;
-offers.forEach((o,i)=>{let line=document.createElement('div');line.className='row';let left=document.createElement('span'),right=document.createElement('span');let label=document.createElement('b');label.textContent=(i+1)+'. '+o.name;left.append(label);let info=document.createElement('small');info.style.display='block';info.textContent=(o.date||'')+(o.manual?' · Introducido por ti':o.cloud?(o.exact?' · El anuncio menciona el UPC; confirma empaque':' · Posible coincidencia: confirma el UPC y tamaño'):' · Registro público, confirma vigencia');left.append(info);if(o.title){let description=document.createElement('small');description.textContent=o.title;description.style.display='block';left.append(description)}if(o.url){let a=document.createElement('a');a.href=o.url;a.target='_blank';a.rel='noopener noreferrer';a.textContent='Ver fuente';a.style.display='block';left.append(a)}let amount=document.createElement('b');amount.className='value';amount.textContent=usd(o.price);right.append(amount);if(hasSale){let d=document.createElement('small');d.style.display='block';d.textContent=sale===o.price?'Igual que tu precio':sale>o.price?'Tu precio +'+usd(sale-o.price):'Tu precio −'+usd(o.price-sale);right.append(d)}line.append(left,right);box.append(line)})
+offers.forEach(o=>{let line=document.createElement('div');line.className='row offer';let left=document.createElement('span'),right=document.createElement('span');let label=document.createElement('b');label.textContent=o.name;left.append(label);let info=document.createElement('small');info.style.display='block';info.textContent=(o.date||'')+(o.manual?'':o.cloud?(o.exact?' · UPC en el anuncio':' · Verifica UPC y tamaño'):' · Registro público');left.append(info);if(o.title){let description=document.createElement('small');description.textContent=o.title;description.style.display='block';left.append(description)}if(o.url){let a=document.createElement('a');a.href=o.url;a.target='_blank';a.rel='noopener noreferrer';a.textContent='Ver fuente';a.style.display='block';left.append(a)}let amount=document.createElement('b');amount.className='value';amount.textContent=usd(o.price);right.append(amount);if(hasSale){let d=document.createElement('small');d.style.display='block';d.textContent=sale===o.price?'Igual que tu precio':sale>o.price?'Tu precio +'+usd(sale-o.price):'Tu precio −'+usd(o.price-sale);right.append(d)}line.append(left,right);box.append(line)})
 }
-function links(){let code=$('upc').value.trim(),name=$('name').value.trim(),q=code||name;if(!q){$('links').innerHTML='<small>Introduce un UPC o producto para ver búsquedas.</small>';return}let arr=[['Walmart','https://www.walmart.com/search?q='+encodeURIComponent(q)],['Amazon','https://www.amazon.com/s?k='+encodeURIComponent(q)],['Google Shopping','https://www.google.com/search?tbm=shop&q='+encodeURIComponent(q)],['Supermercados cercanos','https://www.google.com/search?q='+encodeURIComponent((name||code)+' supermercado Paterson NJ precio')]];$('links').replaceChildren(...arr.map(([label,url])=>{let a=document.createElement('a');a.href=url;a.target='_blank';a.rel='noopener noreferrer';a.textContent='Buscar en '+label;return a}))}function restore(){let obj;publicOffers=[];cloudOffers=[];$('offers').textContent='Buscando precios para este código…';$('cloudStatus').textContent='Preparando búsqueda web…';try{obj=JSON.parse(localStorage.getItem(key())||'null')}catch{};['name','cost','qty','sale','walmart','amazon','local','localName'].forEach(id=>$(id).value=obj?.[id]||'');$('saved').textContent=obj?.date?'Última comparación guardada: '+new Date(obj.date).toLocaleString('es-US'):'';links();calc()}$('upc').addEventListener('change',restore);$('name').addEventListener('input',links);['cost','qty','sale','walmart','amazon','local'].forEach(id=>$(id).addEventListener('input',calc));$('localName').addEventListener('input',renderRanked);$('save').onclick=()=>{if(!/^\d{8,14}$/.test($('upc').value.trim())){$('status').textContent='Introduce un UPC/EAN válido de 8 a 14 dígitos.';return}let o={date:new Date().toISOString()};['name','cost','qty','sale','walmart','amazon','local','localName'].forEach(id=>o[id]=$(id).value);localStorage.setItem(key(),JSON.stringify(o));$('saved').textContent='Comparación guardada: '+new Date(o.date).toLocaleString('es-US')};$('clear').onclick=()=>{['upc','name','cost','qty','sale','walmart','amazon','local','localName'].forEach(id=>$(id).value='');$('saved').textContent='';$('status').textContent='';publicOffers=[];cloudOffers=[];$('cloudStatus').textContent='Escanea un producto para buscar ofertas en la nube.';$('offers').textContent='Escanea un producto para consultar precios.';links();calc()};
+function links(){let code=$('upc').value.trim(),name=$('name').value.trim(),q=code||name;if(!q){$('links').innerHTML='<small>Introduce un UPC o producto para ver búsquedas.</small>';return}let arr=[['Walmart','https://www.walmart.com/search?q='+encodeURIComponent(q)],['Amazon','https://www.amazon.com/s?k='+encodeURIComponent(q)],['Google Shopping','https://www.google.com/search?tbm=shop&q='+encodeURIComponent(q)],['Supermercados cercanos','https://www.google.com/search?q='+encodeURIComponent((name||code)+' supermercado Paterson NJ precio')]];$('links').replaceChildren(...arr.map(([label,url])=>{let a=document.createElement('a');a.href=url;a.target='_blank';a.rel='noopener noreferrer';a.textContent=label;return a}))}function restore(){let obj;currentCode=readCode();publicOffers=[];cloudOffers=[];$('offers').textContent='';$('cloudStatus').textContent='Escanea o escribe un código para ver precios.';$('status').textContent='';try{obj=JSON.parse(localStorage.getItem(key())||'null')}catch{};['name','cost','qty','sale','walmart','amazon','local','localName'].forEach(id=>$(id).value=obj?.[id]||'');$('productField').hidden=!$('name').value;$('saved').textContent=obj?.date?'Última comparación guardada: '+new Date(obj.date).toLocaleString('es-US'):'';links();calc()}let currentCode='';const readCode=()=>$('upc').value.replace(/[\s-]/g,'');$('name').addEventListener('input',links);['cost','qty','sale','walmart','amazon','local'].forEach(id=>$(id).addEventListener('input',calc));$('localName').addEventListener('input',renderRanked);$('save').onclick=()=>{if(!/^\d{8,14}$/.test($('upc').value.trim())){$('saved').textContent='Introduce un UPC/EAN válido de 8 a 14 dígitos.';return}let o={date:new Date().toISOString()};['name','cost','qty','sale','walmart','amazon','local','localName'].forEach(id=>o[id]=$(id).value);localStorage.setItem(key(),JSON.stringify(o));$('saved').textContent='Comparación guardada: '+new Date(o.date).toLocaleString('es-US')};$('clear').onclick=()=>{['upc','name','cost','qty','sale','walmart','amazon','local','localName'].forEach(id=>$(id).value='');$('saved').textContent='';$('status').textContent='';publicOffers=[];cloudOffers=[];clearTimeout(lookupDelay);currentCode='';$('productField').hidden=true;$('cloudStatus').textContent='Escanea o escribe un código para ver precios.';$('offers').textContent='';links();calc()};
 let lookupDelay=null;
-$('upc').addEventListener('input',()=>{clearTimeout(lookupDelay);const upc=$('upc').value.replace(/[\s-]/g,'');if(/^\d{12,14}$/.test(upc)){lookupDelay=setTimeout(()=>{if($('upc').value.replace(/[\s-]/g,'')===upc){restore();$('lookup').click()}},850)}});
-$('upc').addEventListener('keydown',e=>{if(e.key==='Enter'){clearTimeout(lookupDelay);restore();$('lookup').click()}});
+$('upc').addEventListener('input',()=>{clearTimeout(lookupDelay);const upc=$('upc').value.replace(/[\s-]/g,'');if(/^\d{12,14}$/.test(upc)){lookupDelay=setTimeout(()=>{if(readCode()===upc)$('lookup').click()},850)}});
+$('upc').addEventListener('keydown',e=>{if(e.key==='Enter'){clearTimeout(lookupDelay);$('lookup').click()}});
 const sameUPC=(a,b)=>String(a||'').replace(/\D/g,'').replace(/^0+(?=\d)/,'')===String(b||'').replace(/\D/g,'').replace(/^0+(?=\d)/,'');
-const openPriceCache=new Map();
 
 const WORKER_ORIGIN='https://porcento-ia.riverminimarket2.workers.dev';
 async function searchCloudPrices(upc,name){
-const status=$('cloudStatus');cloudOffers=[];renderRanked();status.textContent='☁️ Buscando vendedores y precios en la web…';
+const status=$('cloudStatus');cloudOffers=[];renderRanked();status.textContent='Buscando precios en internet…';
 let controller=new AbortController(),t=setTimeout(()=>controller.abort(),35000);
 try{
 let params=new URLSearchParams({upc});if(name)params.set('name',name.slice(0,100));
 let resp=await fetch(WORKER_ORIGIN+'/prices?'+params.toString(),{signal:controller.signal,headers:{Accept:'application/json'},cache:'no-store'});
 let json=await resp.json();if($('upc').value.replace(/[\s-]/g,'')!==upc)return;
-if(!resp.ok){status.textContent=json.setup_required?'☁️ La búsqueda comercial necesita activar SERPAPI_API_KEY en Cloudflare. Los precios públicos y las búsquedas directas siguen disponibles.':'☁️ Búsqueda web no disponible: '+(json.error||'vuelve a intentar.');return}
+if(!resp.ok){status.textContent=json.setup_required?'La búsqueda web está pendiente de activación. Puedes abrir las tiendas abajo.':'La búsqueda web no está disponible ahora.';return}
 const valid=Array.isArray(json.offers)?json.offers:[];
 cloudOffers=valid.filter(x=>Number(x.price)>0&&x.url&&x.seller).map(x=>({name:x.seller,price:Number(x.price),title:x.title||'',date:'Google Shopping · '+(json.searched_at?new Date(json.searched_at).toLocaleDateString('es-US'):'consultado'),cloud:true,url:x.url,exact:!!x.exact_upc_in_listing}));
 renderRanked();
-status.textContent=cloudOffers.length?'☁️ '+cloudOffers.length+' ofertas encontradas en Google Shopping, ordenadas con el resto. Confirma mismo UPC, tamaño y disponibilidad.':'☁️ No se encontraron ofertas web para este UPC; consulta los enlaces a las tiendas.';
-}catch(e){if($('upc').value.replace(/[\s-]/g,'')===upc)status.textContent='☁️ No se pudo completar la búsqueda web. Revisa la conexión o vuelve a intentar.'}finally{clearTimeout(t)}
+status.textContent=cloudOffers.length?'Confirma el tamaño y la disponibilidad en la tienda.':'No se encontraron ofertas en internet.';
+}catch(e){if($('upc').value.replace(/[\s-]/g,'')===upc)status.textContent='No se pudieron consultar precios en internet.'}finally{clearTimeout(t)}
 }
 
 async function searchOpenPrices(upc){
-let box=$('offers');publicOffers=[];renderRanked();box.textContent='Buscando precios registrados públicamente…';
+let box=$('offers');publicOffers=[];renderRanked();box.textContent='';
 let options=upc.length===12?['0'+upc,upc]:[upc],found=[],ok=false;
 for(let code of options){let ctrl=new AbortController(),t=setTimeout(()=>ctrl.abort(),6500);try{let url='https://prices.openfoodfacts.org/api/v1/prices?product_code='+encodeURIComponent(code)+'&currency=USD&type=PRODUCT&size=40&order_by=-date';
 let r=await fetch(url,{signal:ctrl.signal});if(!r.ok)continue;ok=true;let data=await r.json();if(Array.isArray(data.items)){found=data.items;if(found.length)break}}catch(e){}finally{clearTimeout(t)}}
 if($('upc').value.replace(/[\s-]/g,'')!==upc)return;
 let now=Date.now();publicOffers=found.filter(p=>sameUPC(p.product_code,upc)&&p.currency==='USD'&&Number(p.price)>0&&(!p.price_per||p.price_per==='UNIT')&&p.date&&now-new Date(p.date).getTime()>=0&&now-new Date(p.date).getTime()<180*86400000&&p.location&&String(p.location.osm_address_country_code||'').toUpperCase()==='US').map(p=>({name:[p.location.osm_brand||p.location.osm_name||'Comercio no identificado',p.location.osm_address_city||''].filter(Boolean).join(' · '),price:Number(p.price),date:p.date,url:'https://prices.openfoodfacts.org/api/v1/prices/'+encodeURIComponent(p.id)}));
-renderRanked();box.textContent=publicOffers.length?'Precios publicados por usuarios de Open Prices; verifica tienda, empaque y fecha. No son cotizaciones en vivo.':ok?'No hay precios públicos recientes verificados para este código en EE. UU.':'No fue posible consultar el servicio de precios. Puedes buscar en las tiendas o introducirlos manualmente.'}
-$('lookup').onclick=async()=>{let code=$('upc').value.replace(/[\s-]/g,'');if(!/^\d{8,14}$/.test(code)){$('status').textContent='Introduce un código UPC/EAN de 8 a 14 dígitos.';return}$('upc').value=code;links();searchOpenPrices(code);searchCloudPrices(code,$('name').value.trim());$('status').textContent='Buscando el nombre del producto…';let sources=[['Open Food Facts','world.openfoodfacts.org'],['Open Beauty Facts','world.openbeautyfacts.org'],['Open Products Facts','world.openproductsfacts.org']], variants=code.length===12?['0'+code,code]:code.length===13&&code[0]==='0'?[code,code.slice(1)]:[code];let found=false,available=false;for(let [label,domain] of sources){if(found)break;for(let value of variants){let controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),5000);try{let r=await fetch('https://'+domain+'/api/v2/product/'+value+'.json?fields=code,product_name,product_name_en,generic_name,brands,quantity',{signal:controller.signal});if(!r.ok)continue;available=true;let d=await r.json(),p=d.product||{};if($('upc').value!==code)return;if(d.status!==1)continue;let name=String(p.product_name||p.product_name_en||p.generic_name||'').trim();if(!name)continue;let brand=String(p.brands||'').trim(),quantity=String(p.quantity||'').trim();$('name').value=[brand&&!name.toLowerCase().includes(brand.toLowerCase())?brand:'',name,quantity].filter(Boolean).join(' · ');$('status').textContent='✅ Producto identificado en '+label+'. Comprueba la presentación.';found=true;break}catch(e){}finally{clearTimeout(timeout)}}}if($('upc').value!==code)return;if(!found){$('status').textContent=available?'No se encontró un nombre verificable para este UPC. Escríbelo manualmente.':'No se pudo consultar el catálogo. Escribe el nombre manualmente.'}links()};async function stop(){scanning=false;cancelAnimationFrame(raf);if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}if(html5scanner){const scanner=html5scanner;html5scanner=null;try{if(scanner.isScanning)await scanner.stop()}catch(e){}try{scanner.clear()}catch(e){}}$('video').hidden=true;$('qr-reader').hidden=true;$('stop').hidden=true;$('scan').hidden=false}
-function foundCode(raw){let code=String(raw||'').replace(/\D/g,'');if(!/^\d{8,14}$/.test(code)||!scanning)return;scanning=false;$('upc').value=code;stop();restore();$('status').textContent='✅ Código leído: '+code+'. Buscando el producto…';$('lookup').click()}
+renderRanked();box.textContent=publicOffers.length?'Registros de Open Prices. Comprueba la fecha y la presentación.':ok?'':'No se pudo consultar Open Prices.'}
+$('lookup').onclick=async()=>{clearTimeout(lookupDelay);let code=readCode();if(!/^\d{8,14}$/.test(code)){$('status').textContent='Introduce un código UPC/EAN de 8 a 14 dígitos.';return}$('upc').value=code;if(currentCode!==code)restore();links();searchOpenPrices(code);searchCloudPrices(code,$('name').value.trim());$('status').textContent='Buscando el nombre del producto…';let sources=[['Open Food Facts','world.openfoodfacts.org'],['Open Beauty Facts','world.openbeautyfacts.org'],['Open Products Facts','world.openproductsfacts.org']], variants=code.length===12?['0'+code,code]:code.length===13&&code[0]==='0'?[code,code.slice(1)]:[code];let found=false,available=false;for(let [label,domain] of sources){if(found)break;for(let value of variants){let controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),5000);try{let r=await fetch('https://'+domain+'/api/v2/product/'+value+'.json?fields=code,product_name,product_name_en,generic_name,brands,quantity',{signal:controller.signal});if(!r.ok)continue;available=true;let d=await r.json(),p=d.product||{};if($('upc').value!==code)return;if(d.status!==1)continue;let name=String(p.product_name||p.product_name_en||p.generic_name||'').trim();if(!name)continue;let brand=String(p.brands||'').trim(),quantity=String(p.quantity||'').trim();$('name').value=[brand&&!name.toLowerCase().includes(brand.toLowerCase())?brand:'',name,quantity].filter(Boolean).join(' · ');$('status').textContent='Identificado en '+label+'.';found=true;break}catch(e){}finally{clearTimeout(timeout)}}}if($('upc').value!==code)return;$('productField').hidden=false;if(!found){$('status').textContent=available?'Escribe el nombre si lo conoces.':'Catálogo temporalmente no disponible.'}links()};async function stop(){scanning=false;cancelAnimationFrame(raf);if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}if(html5scanner){const scanner=html5scanner;html5scanner=null;try{if(scanner.isScanning)await scanner.stop()}catch(e){}try{scanner.clear()}catch(e){}}$('video').hidden=true;$('qr-reader').hidden=true;$('stop').hidden=true;$('scan').hidden=false}
+function foundCode(raw){let code=String(raw||'').replace(/\D/g,'');if(!/^\d{8,14}$/.test(code)||!scanning)return;scanning=false;$('upc').value=code;stop();$('lookup').click()}
 async function tick(){if(!stream||!scanning)return;try{let matches=await detector.detect($('video'));if(matches.length){foundCode(matches[0].rawValue);if(!scanning)return}}catch(e){}raf=requestAnimationFrame(tick)}
 let loadingScanner=null;function loadScanner(){if(window.Html5Qrcode)return Promise.resolve();if(loadingScanner)return loadingScanner;loadingScanner=new Promise((resolve,reject)=>{const script=document.createElement('script');script.src='https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js';script.onload=()=>window.Html5Qrcode?resolve():reject(Error('Lector no disponible'));script.onerror=()=>reject(Error('No se pudo descargar el lector'));document.head.appendChild(script)}).catch(e=>{loadingScanner=null;throw e});return loadingScanner}
 async function nativeCamera(){if(!('BarcodeDetector'in window))throw Error('Lector nativo no disponible');detector=new BarcodeDetector({formats:['ean_13','ean_8','upc_a','upc_e']});stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}},audio:false});$('video').srcObject=stream;$('video').hidden=false;await $('video').play();$('status').textContent='Enfoca el código completo y muévelo despacio.';tick()}
-$('scan').onclick=async()=>{if(!navigator.mediaDevices?.getUserMedia){$('status').textContent='Abre Porcento en Safari o Chrome y concede permiso a la cámara.';return}await stop();scanning=true;$('scan').hidden=true;$('stop').hidden=false;$('status').textContent='Abriendo la cámara trasera…';try{await loadScanner();if(!scanning)return;$('qr-reader').hidden=false;let F=window.Html5QrcodeSupportedFormats;html5scanner=new Html5Qrcode('qr-reader',{formatsToSupport:[F.EAN_13,F.EAN_8,F.UPC_A,F.UPC_E],verbose:false});let width=Math.min(320,Math.max(210,Math.floor(window.innerWidth*.78)));await html5scanner.start({facingMode:'environment'},{fps:12,qrbox:{width:width,height:Math.round(width*.42)},disableFlip:true},foundCode,()=>{});$('status').textContent='Pon todas las barras dentro del recuadro y mantén el teléfono estable.'}catch(e){await stop();scanning=true;$('scan').hidden=true;$('stop').hidden=false;try{await nativeCamera()}catch(e2){await stop();$('status').textContent='No se pudo abrir la cámara. Revisa los permisos o usa «Leer desde foto».'}}};
+$('scan').onclick=async()=>{if(!navigator.mediaDevices?.getUserMedia){$('status').textContent='Abre Porcento en Safari o Chrome y concede permiso a la cámara.';return}await stop();scanning=true;$('scan').hidden=true;$('stop').hidden=false;$('status').textContent='Abriendo la cámara trasera…';try{await loadScanner();if(!scanning)return;$('qr-reader').hidden=false;let F=window.Html5QrcodeSupportedFormats;html5scanner=new Html5Qrcode('qr-reader',{formatsToSupport:[F.EAN_13,F.EAN_8,F.UPC_A,F.UPC_E],verbose:false});let width=Math.min(320,Math.max(210,Math.floor(window.innerWidth*.78)));await html5scanner.start({facingMode:'environment'},{fps:12,qrbox:{width:width,height:Math.round(width*.42)},disableFlip:true},foundCode,()=>{});$('status').textContent='Coloca el código completo dentro del recuadro.'}catch(e){await stop();scanning=true;$('scan').hidden=true;$('stop').hidden=false;try{await nativeCamera()}catch(e2){await stop();$('status').textContent='No se pudo abrir la cámara. Revisa los permisos o usa «Leer desde foto».'}}};
 $('photoButton').onclick=()=>$('photo').click();
 $('photo').onchange=async()=>{let file=$('photo').files?.[0];if(!file)return;await stop();scanning=true;$('status').textContent='Leyendo el código de la foto…';try{await loadScanner();$('qr-reader').hidden=false;let F=window.Html5QrcodeSupportedFormats;html5scanner=new Html5Qrcode('qr-reader',{formatsToSupport:[F.EAN_13,F.EAN_8,F.UPC_A,F.UPC_E],verbose:false});let code=await html5scanner.scanFile(file,true);foundCode(code);if(scanning){await stop();$('status').textContent='No se encontró un código UPC/EAN en la foto.'}}catch(e){await stop();$('status').textContent='No pude leer la foto. Tómala de cerca, recta y sin reflejos.'}finally{$('photo').value=''}};
 $('stop').onclick=stop;window.addEventListener('pagehide',stop);links();calc();
-</script></body></html>
+  </script>
+</body>
+</html>
