@@ -38,7 +38,7 @@
     const computed = sum + adjustmentTotal;
     const subtotalDifference = subtotal === null ? null : subtotal - sum;
     const difference = total === null ? null : total - computed;
-    const verified = rows.length > 0 && pending === 0 && !totals.partial && !adjustments.includes(null)
+    const verified = rows.length > 0 && pending === 0 && !totals.partial && !totals.conflictingTotal && !adjustments.includes(null)
       && difference === 0 && (subtotalDifference === null || subtotalDifference === 0);
     return { sum, computed, difference, subtotalDifference, pending, verified };
   }
@@ -120,7 +120,7 @@
     const textRow = new RegExp('^\\s*\\d{1,4}\\s+(.+?)\\s+(\\d+)\\s*(ca(?:ja)?s?|cs|cases?|un(?:d|id(?:ades)?)?)\\s+' + money + '(?:\\s+' + money + ')?[|\\s]*$', 'i');
     const tableRow = new RegExp('^([0-9]{6,14})[|.\\s]+(.+?)\\s+(\\d+)\\s+' + money + '(?:[|\\s]+' + money + ')?[|\\s]*$', 'i');
     const receiptPrice = new RegExp('^(\\d+)\\s*(cases?|cs(?:-\\d+)?|bx|box|bags?|bg|dz|pk(?:-\\d+)?|pack|each|ea)\\s*@\\s*' + money + '(?:[|\\s]+' + money + ')?[|\\s]*$', 'i');
-    const dairyRow = new RegExp('^[^\\w]*([0-9]{3,6})[.,)]?\\s+(.*?)\\s+(\\d+)\\s+' + money + '[|\\s]*$');
+    const dairyRow = new RegExp('^[^\\w]*([0-9]{3,6})[.,:;)]?\\s+(.*?)\\s+(\\d+)\\s+' + money + '[|\\s]*$');
     const amountOnly = new RegExp('^' + money + '$');
     const totalLabel = /^(invoice total|total this inv[o0][i1l]c[e3]|total factura|total neto|grand total|sub\s*total(?:\s+de\s+productos)?|total)\b[\s:/~|]*(.*)$/i;
     const adjustmentLabel = /^(sales tax|total tax|tax|impuesto(?:s)?|itbis|shipping(?: fee)?|freight|flete|env[ií]o|deposit(?: fee)?|dep[oó]sito|service fee|recargo|discount|descuento)\b\s*[:/]*\s*(.*)$/i;
@@ -171,10 +171,10 @@
         itemCode = '';
         continue;
       }
-      const dairyMatch = dairy && line.replace(/[\s\\|"'<>]+$/, '').match(dairyRow);
+      const dairyMatch = dairy && line.replace(/[\s\\|"'<>]+$/, '').replace(/(\d)[;:](?=\d{2}$)/, '$1.').match(dairyRow);
       if (dairyMatch) {
         const [, codigo, description, pcs, total_linea] = dairyMatch;
-        const nombre = description.replace(/^(?:(?:\d+(?!\d|\/)|[_~=\/|.·—–-]+)\s*)+/, '').trim();
+        const nombre = description.replace(/^(?:(?:\d+(?!\d|\/|\s*(?:OZ|QT)\b)|[_~=\/|.·—–-]+)\s*)+/i, '').trim();
         if (/[a-záéíóú]{3}/i.test(nombre)) {
           products.push({ nombre, codigo, piezas_facturadas: pcs, total_linea,
             unidades_vendibles_totales: /\b\d+\s*\/\s*C\b/i.test(nombre) ? null : pcs });

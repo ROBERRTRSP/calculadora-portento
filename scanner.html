@@ -18,6 +18,9 @@
     .invoice-disclosure { margin-top: 8px; }
     .invoice-disclosure .caption { display: block; margin-top: 8px; }
     #items { margin-top: 8px; }
+    #basicOptions { margin-top: 8px; }
+    #basicOptions select { width: 100%; min-height: 44px; padding: 8px; border: 1px solid var(--hairline); border-radius: 10px; background: var(--field); color: inherit; font: inherit; }
+    #totalPhotoStatus { margin-top: 4px; }
     #printedTotalEntry { margin-top: 10px; }
     #printedTotalEntry input { margin-bottom: 6px; }
     #invoiceSummary[data-state="review"] { color: var(--negative); }
@@ -52,6 +55,21 @@
         <button id="ai" type="button">Leer con IA</button>
         <button id="read" type="button">Lector básico</button>
       </div>
+      <details class="invoice-disclosure" id="basicOptions">
+        <summary>Ayudar al lector básico</summary>
+        <div class="details-body">
+          <label for="invoiceFormat">Formato de factura</label>
+          <select id="invoiceFormat">
+            <option value="">Detectar automáticamente</option>
+            <option value="dairy">Jersey Dairy Express</option>
+          </select>
+          <small class="caption">Fotografía la tabla de productos de cerca. Si el total quedó fuera, añade una foto del total de la misma factura.</small>
+          <button id="takeTotalPhoto" type="button">Tomar foto del total</button>
+          <button class="quiet" id="removeTotalPhoto" type="button" hidden>Quitar foto del total</button>
+          <input id="totalPhotoFile" type="file" accept="image/*" capture="environment" hidden>
+          <p id="totalPhotoStatus" class="status" role="status"></p>
+        </div>
+      </details>
       <label class="invoice-options"><input type="checkbox" id="smallPrint"> IA con ampliaciones para tickets largos o letra pequeña</label>
       <p id="status" class="status" role="status"></p>
       <img id="preview" hidden alt="Vista previa de la factura">
@@ -259,6 +277,7 @@ function updateInvoiceSummary(check) {
     check.subtotalDifference ? differenceText(check.subtotalDifference) + ' para cuadrar el subtotal.' : '',
     check.difference ? differenceText(check.difference) + ' para cuadrar el total.' : '',
     check.pending ? 'Confirma los importes pendientes.' : '',
+    totals.conflictingTotal ? 'Las dos lecturas dieron totales distintos. Confirma el que aparece en la factura.' : '',
     totals.adjustments.includes(null) ? 'Hay un ajuste impreso por confirmar.' : '',
     totals.partial ? 'La imagen o el documento está incompleto.' : '',
     reviewCount ? reviewCount + (reviewCount === 1 ? ' renglón por revisar.' : ' renglones por revisar.') : '',
@@ -276,6 +295,7 @@ $('printedTotalEntry').onsubmit = event => {
   }
   totals.total = entered;
   totals.manualTotal = true;
+  totals.conflictingTotal = false;
   $('totalInputStatus').textContent = '';
   recalc();
 };
@@ -400,6 +420,27 @@ function readingIsVerified(result) {
 }
 
 let selectedFile = null;
+let selectedTotalPhoto = null;
+
+function setTotalPhoto(file) {
+  selectedTotalPhoto = file;
+  $('removeTotalPhoto').hidden = !file;
+  $('totalPhotoStatus').textContent = file ? 'Foto del total lista para el lector básico.' : '';
+}
+
+$('takeTotalPhoto').onclick = () => {
+  if (!selectedFile) {
+    $('totalPhotoStatus').textContent = 'Toma primero la foto de la tabla de productos.';
+    return;
+  }
+  $('totalPhotoFile').click();
+};
+$('totalPhotoFile').onchange = () => {
+  const input = $('totalPhotoFile');
+  if (input.files[0]) setTotalPhoto(input.files[0]);
+  input.value = '';
+};
+$('removeTotalPhoto').onclick = () => setTotalPhoto(null);
 
 $('takePhoto').onclick = () => $('cameraFile').click();
 $('chooseFile').onclick = () => $('file').click();
@@ -409,6 +450,7 @@ for (const id of ['cameraFile', 'file']) {
     const file = input.files[0];
     if (!file) return;
     selectedFile = file;
+    setTotalPhoto(null);
     input.value = '';
     rows = [];
     totals = null;
@@ -428,7 +470,7 @@ async function withInvoice(read) {
     $('status').textContent = 'Toma una foto de la factura o elige una ya guardada.';
     return;
   }
-  const controls = ['takePhoto', 'chooseFile', 'ai', 'read', 'parse'].map($);
+  const controls = ['takePhoto', 'chooseFile', 'takeTotalPhoto', 'removeTotalPhoto', 'invoiceFormat', 'ai', 'read', 'parse'].map($);
   controls.forEach(button => { button.disabled = true; });
   try {
     $('status').textContent = 'Preparando factura…';
@@ -459,7 +501,7 @@ async function readWithAI(endpoint, image, details, retry = false) {
     throw Error('Falta configurar OPENAI_API_KEY en Cloudflare. Puedes usar Lector básico.');
   }
   if (data?.setup_required === true || (response.status === 502 && typeof data?.detail === 'string' && /(?:incorrect|invalid) api key/i.test(data.detail))) {
-    throw Error('OpenAI rechazó la clave del servidor. Usa Lector básico o actualiza OPENAI_API_KEY en Cloudflare.');
+    throw Error('OpenAI rechazó la clave del servidor. Actualiza OPENAI_API_KEY en Cloudflare. En Ayudar al lector básico puedes elegir el formato y añadir una foto del total.');
   }
   if (response.status === 422) return { productos: [], lectura_parcial: true };
   if (!response.ok || !Array.isArray(data?.productos)) throw Error(data?.error || 'No se completó la lectura con IA. Puedes usar el lector básico.');
@@ -503,74 +545,102 @@ $('ai').onclick = () => {
 $('read').onclick = () => withInvoice(async canvas => {
   preview(canvas);
   await loadScript('https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js');
-  $('status').textContent = 'Leyendo texto… puede tardar unos segundos.';
-  const worker = await window.Tesseract.createWorker('eng+spa');
+  $('status').textContent = 'Leyendo los productos…';
+  const Tesseract = window.Tesseract;
+  const worker = await Tesseract.createWorker('eng+spa');
+  const forceDairy = $('invoiceFormat').value === 'dairy';
+  const setMode = mode => worker.setParameters({ tessedit_pageseg_mode: mode, preserve_interword_spaces: '1' });
+  const recognize = async image => (await worker.recognize(image)).data.text;
+  const notes = [canvas.dataset.note];
+  let result = null;
+  let text = '';
+  let separateTotals = null;
   try {
-    let { data: { text } } = await worker.recognize(canvas);
-    let result = invoice.parseText(text);
-    const notes = [canvas.dataset.note];
-    if (!readingIsVerified(result)) {
-      $('status').textContent = 'Leyendo la tabla y el total por separado…';
+    await setMode(Tesseract.PSM.SINGLE_BLOCK);
+    const firstText = await recognize(canvas);
+    const dairy = forceDairy || invoice.isDairyInvoice(firstText);
+    const parse = (input, dairyHint = dairy) => invoice.parseText(input, dairyHint ? { dairy: true } : undefined);
+    const firstTotal = parse(firstText).totals.total;
+    const consider = (input, footer = separateTotals) => {
+      const next = parse(input);
+      const tableTotal = next.totals.total ?? firstTotal;
+      if (footer) {
+        if (footer.total !== null && tableTotal !== null && tableTotal !== footer.total) {
+          next.totals.conflictingTotal = true;
+        }
+        next.totals.total = footer.total ?? next.totals.total;
+        next.totals.subtotal ??= footer.subtotal;
+        if (!next.totals.adjustments.length) next.totals.adjustments = footer.adjustments;
+      }
+      if (!result || invoice.preferReading(result, next)) {
+        result = next;
+        text = input;
+      }
+    };
+
+    if (selectedTotalPhoto) {
+      $('status').textContent = 'Leyendo la foto del total…';
       try {
-        await worker.setParameters({ tessedit_pageseg_mode: window.Tesseract.PSM.SINGLE_BLOCK });
-        const table = await worker.recognize(ocrRegion(canvas, .08, .60));
-        const footer = await worker.recognize(ocrRegion(canvas, .53, .97));
-        let tableText = table.data.text;
-        let footerText = footer.data.text;
-        let footerTotals = invoice.parseText(footerText).totals;
-        if (invoice.isDairyInvoice(text + '\n' + tableText)) {
-          $('status').textContent = 'Ampliando las columnas de Jersey Dairy…';
-          const dairy = await worker.recognize(ocrRegion(canvas, .20, .40, .11, .79));
-          const dairyResult = invoice.parseText(dairy.data.text, { dairy: true });
-          if (invoice.preferReading(invoice.parseText(tableText, { dairy: true }), dairyResult)) {
-            tableText = dairy.data.text;
-          }
-          if (footerTotals.total === null) {
-            await worker.setParameters({ tessedit_pageseg_mode: window.Tesseract.PSM.SPARSE_TEXT });
-            const printed = await worker.recognize(ocrRegion(canvas, .55, .70, .49, .84, 3));
-            await worker.setParameters({ tessedit_pageseg_mode: window.Tesseract.PSM.SINGLE_BLOCK });
-            const focusedTotals = invoice.parseText(printed.data.text).totals;
-            if (focusedTotals.total !== null) {
-              footerText = printed.data.text;
-              footerTotals = focusedTotals;
-            }
-          }
+        const footerCanvas = await readCanvas(selectedTotalPhoto);
+        await setMode(Tesseract.PSM.SPARSE_TEXT);
+        separateTotals = parse(await recognize(ocrRegion(footerCanvas, 0, 1, 0, 1, 2))).totals;
+        if (separateTotals.total === null) {
+          await setMode(Tesseract.PSM.SINGLE_BLOCK);
+          separateTotals = parse(await recognize(footerCanvas)).totals;
         }
-        const candidateText = tableText + '\n' + footerText;
-        const candidate = invoice.parseText(tableText, { dairy: invoice.isDairyInvoice(text + '\n' + tableText) });
-        candidate.totals.total ??= footerTotals.total;
-        candidate.totals.subtotal ??= footerTotals.subtotal;
-        if (candidate.totals.adjustments.length === 0) candidate.totals.adjustments = footerTotals.adjustments;
-        if (invoice.preferReading(result, candidate)) {
-          result = candidate;
-          text = candidateText;
-        } else if (result.totals.total === null && footerTotals.total !== null) {
-          result.totals.total = footerTotals.total;
-          text += '\n' + footerText;
-        }
-        if (!readingIsVerified(result)) {
-          const second = await worker.recognize(contrastOf(canvas));
-          const full = invoice.parseText(second.data.text);
-          full.totals.total ??= footerTotals.total;
-          if (invoice.preferReading(result, full)) {
-            result = full;
-            text = second.data.text + '\n' + footerText;
+        if (separateTotals.total === null) notes.push('La foto del total no mostró un importe con la etiqueta Total. Puedes escribirlo abajo.');
+      } catch {
+        notes.push('No se pudo leer la segunda foto. Puedes escribir el total abajo.');
+      }
+    }
+    consider(firstText);
+    if (!readingIsVerified(result)) {
+      $('status').textContent = 'Ampliando la tabla y revisando los importes…';
+      try {
+        await setMode(Tesseract.PSM.SINGLE_BLOCK);
+        const focused = await recognize(ocrRegion(canvas, 0, 1, 0, 1, 2));
+        consider(focused);
+        if (!readingIsVerified(result) && !selectedTotalPhoto) {
+          const table = await recognize(ocrRegion(canvas, .07, .61));
+          let footer = parse(await recognize(ocrRegion(canvas, .53, .97))).totals;
+          const dairyLayout = dairy || invoice.isDairyInvoice(table);
+          if (dairyLayout && footer.total === null) {
+            await setMode(Tesseract.PSM.SPARSE_TEXT);
+            const focusedTotal = parse(await recognize(ocrRegion(canvas, .55, .70, .49, .84, 3))).totals;
+            if (focusedTotal.total !== null) footer = focusedTotal;
+            await setMode(Tesseract.PSM.SINGLE_BLOCK);
+          }
+          consider(firstText, footer);
+          consider(table, footer);
+          if (!readingIsVerified(result) && dairyLayout) {
+            const detail = await recognize(ocrRegion(canvas, .20, .40, .11, .79));
+            consider((dairy ? '' : 'JERSEY DAIRY\n') + detail, footer);
           }
         }
       } catch {
-        notes.push('No se pudo completar la segunda lectura.');
+        notes.push('La relectura se interrumpió. Revisa los renglones recuperados.');
       }
     }
     $('raw').value = text;
     result.totals.partial ||= Boolean(canvas.dataset.note);
     displayInvoice(result, notes);
+    if (!readingIsVerified(result)) $('basicOptions').open = true;
   } finally {
     await worker.terminate();
   }
 });
 $('parse').onclick = () => {
-  const result = invoice.parseText($('raw').value);
-  result.totals.partial ||= Boolean(totals?.partial);
+  const result = invoice.parseText($('raw').value, $('invoiceFormat').value === 'dairy' ? { dairy: true } : undefined);
+  if (totals) {
+    result.totals.partial ||= totals.partial;
+    result.totals.conflictingTotal ||= totals.conflictingTotal;
+    if (totals.manualTotal || result.totals.total === null) {
+      result.totals.total = totals.total;
+      result.totals.manualTotal = totals.manualTotal;
+    }
+    result.totals.subtotal ??= totals.subtotal;
+    if (!result.totals.adjustments.length) result.totals.adjustments = totals.adjustments;
+  }
   displayInvoice(result);
 };
 $('add').onclick = () => { rows.push({ nombre: '', costo: '', cantidad: '' }); draw(); };
