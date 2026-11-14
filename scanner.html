@@ -18,6 +18,7 @@
     .invoice-disclosure { margin-top: 8px; }
     .invoice-disclosure .caption { display: block; margin-top: 8px; }
     #items { margin-top: 8px; }
+    #invoiceSummary[data-state="review"] { color: var(--negative); }
     .product { padding-top: 7px; border-top: 1px solid var(--hairline); }
     .product + .product { margin-top: 8px; }
     .product-title { display: flex; align-items: end; gap: 8px; margin-bottom: 7px; }
@@ -134,7 +135,7 @@ function draw() {
       input.type = mode ? 'number' : 'text';
       if (mode) {
         input.inputMode = mode;
-        input.min = mode === 'decimal' ? '0' : '1';
+        if (mode === 'numeric') input.min = '1';
         input.step = mode === 'decimal' ? '.01' : '1';
       }
       input.value = row[name];
@@ -185,11 +186,12 @@ function draw() {
       confirm.type = 'button';
       confirm.textContent = 'Confirmar costo y unidades';
       confirm.onclick = () => {
-        if (invoice.suggestedPrice(row.costo, row.cantidad, 33) === null) {
-          note.textContent = 'Escribe un costo mayor que cero y un número entero de unidades.';
+        if (invoice.moneyCents(row.costo) === null || !Number.isSafeInteger(Number(row.cantidad)) || Number(row.cantidad) < 1) {
+          note.textContent = 'Escribe un importe y un número entero de unidades.';
           return;
         }
         row.review = false;
+        row.costUnconfirmed = false;
         row.warning = '';
         note.remove();
         confirm.remove();
@@ -204,25 +206,26 @@ function draw() {
 }
 
 function recalc() {
+  const check = totals ? invoice.reconcile(rows, totals) : null;
   [...$('items').children].forEach((product, index) => {
     const row = rows[index];
     for (const amount of product.querySelectorAll('[data-margin]')) {
       const margin = Number(amount.dataset.margin);
-      const price = row.review ? null : invoice.suggestedPrice(row.costo, row.cantidad, margin);
+      const price = row.review || (check && !check.verified) ? null : invoice.suggestedPrice(row.costo, row.cantidad, margin);
       amount.textContent = price === null ? '—' : money(price);
     }
   });
-  updateInvoiceSummary();
+  updateInvoiceSummary(check);
 }
 
 const invoice = window.PorcentoFactura;
 const margins = [33, 45, 50];
-let printedTotal = null;
+let totals = null;
 let documentNotes = [];
 
 function displayInvoice(result, notes = []) {
   rows = result.rows;
-  printedTotal = result.printed;
+  totals = result.totals;
   documentNotes = Array.isArray(notes) ? notes.filter(note => typeof note === 'string').slice(0, 5) : [];
   draw();
   $('status').textContent = rows.length
@@ -230,22 +233,27 @@ function displayInvoice(result, notes = []) {
     : 'No pude identificar productos. Prueba una foto más cerca o añade un producto manualmente.';
 }
 
-function updateInvoiceSummary() {
-  const complete = rows.filter(row => Number(row.costo) > 0);
-  const sum = complete.reduce((total, row) => total + invoice.cents(Number(row.costo)), 0);
-  const difference = printedTotal === null ? null : invoice.cents(printedTotal) - sum;
+function updateInvoiceSummary(check) {
+  const summary = $('invoiceSummary');
+  const formatted = cents => money(cents / 100);
   const reviewCount = rows.filter(row => row.review || !Number(row.costo) || !Number(row.cantidad)).length;
-  const balance = difference === null ? 'Total impreso sin verificar.'
-    : difference === 0 && complete.length === rows.length ? 'Los importes cuadran con el total impreso.'
-    : 'Revisa los importes. Diferencia con el total impreso: ' + money(Math.abs(difference) / 100) + '.';
-  $('invoiceSummary').textContent = rows.length ? [
-    'Importes leídos: ' + money(sum / 100) + '.',
-    printedTotal === null ? '' : 'Total impreso: ' + money(printedTotal) + '.',
-    balance,
+  const differenceText = difference => difference > 0 ? 'Faltan ' + formatted(difference) : 'Sobran ' + formatted(-difference);
+  summary.dataset.state = check && !check.verified ? 'review' : '';
+  summary.textContent = check ? [
+    check.verified ? 'Total cuadrado.' : 'Factura pendiente de revisión.',
+    'Importes leídos: ' + formatted(check.sum) + '.',
+    totals.subtotal === null ? '' : 'Subtotal impreso: ' + formatted(totals.subtotal) + '.',
+    check.computed === check.sum ? '' : 'Con ajustes: ' + formatted(check.computed) + '.',
+    totals.total === null ? 'No se pudo leer el total impreso. Toma una foto que incluya el final.' : 'Total impreso: ' + formatted(totals.total) + '.',
+    check.subtotalDifference ? differenceText(check.subtotalDifference) + ' para cuadrar el subtotal.' : '',
+    check.difference ? differenceText(check.difference) + ' para cuadrar el total.' : '',
+    check.pending ? 'Confirma los importes pendientes.' : '',
+    totals.adjustments.includes(null) ? 'Hay un ajuste impreso por confirmar.' : '',
+    totals.partial ? 'La imagen o el documento está incompleto.' : '',
     reviewCount ? reviewCount + (reviewCount === 1 ? ' producto por revisar.' : ' productos por revisar.') : '',
     ...documentNotes
   ].filter(Boolean).join(' ') : '';
-  $('export').disabled = !rows.length;
+  $('export').disabled = !rows.length || Boolean(check && !check.verified);
 }
 
 const scripts = new Map();
@@ -302,7 +310,7 @@ async function readCanvas(file) {
   }
 }
 
-function detailsOf(canvas) {
+function detailsOf(canvas, quality = .86) {
   const sections = 3;
   const height = Math.ceil(canvas.height * 0.39);
   return Array.from({ length: sections }, (_, index) => {
@@ -312,8 +320,22 @@ function detailsOf(canvas) {
     crop.width = Math.round(canvas.width * zoom);
     crop.height = Math.round(height * zoom);
     crop.getContext('2d').drawImage(canvas, 0, offset, canvas.width, height, 0, 0, crop.width, crop.height);
-    return crop.toDataURL('image/jpeg', .86);
+    return crop.toDataURL('image/jpeg', quality);
   });
+}
+
+function contrastOf(canvas) {
+  const adjusted = document.createElement('canvas');
+  adjusted.width = canvas.width;
+  adjusted.height = canvas.height;
+  const context = adjusted.getContext('2d');
+  context.filter = 'grayscale(100%) contrast(165%)';
+  context.drawImage(canvas, 0, 0);
+  return adjusted;
+}
+
+function readingIsVerified(result) {
+  return invoice.reconcile(result.rows, result.totals).verified;
 }
 
 let selectedFile = null;
@@ -327,6 +349,11 @@ for (const id of ['cameraFile', 'file']) {
     if (!file) return;
     selectedFile = file;
     input.value = '';
+    rows = [];
+    totals = null;
+    documentNotes = [];
+    $('raw').value = '';
+    draw();
     $('preview').hidden = true;
     $('preview').removeAttribute('src');
     $('status').textContent = '';
@@ -340,7 +367,7 @@ async function withInvoice(read) {
     $('status').textContent = 'Toma una foto de la factura o elige una ya guardada.';
     return;
   }
-  const controls = ['takePhoto', 'chooseFile', 'ai', 'read'].map($);
+  const controls = ['takePhoto', 'chooseFile', 'ai', 'read', 'parse'].map($);
   controls.forEach(button => { button.disabled = true; });
   try {
     $('status').textContent = 'Preparando factura…';
@@ -359,6 +386,23 @@ function preview(canvas) {
   return image;
 }
 
+async function readWithAI(endpoint, image, details, retry = false) {
+  const body = JSON.stringify({ image, details, relectura: retry });
+  if (body.length >= 8_900_000) throw Error('La foto es muy pesada. Prueba una foto más ligera.');
+  const response = await fetch(endpoint, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
+    signal: AbortSignal.timeout(retry ? 65000 : 90000)
+  });
+  const data = await response.json().catch(() => null);
+  if ((response.status === 503 && typeof data?.error === 'string' && data.error.includes('OPENAI_API_KEY')) ||
+      data?.setup_required === true || (response.status === 502 && typeof data?.detail === 'string' && /incorrect api key/i.test(data.detail))) {
+    throw Error('Revisa la clave de OpenAI en Cloudflare. Puedes verificar los importes con el lector básico.');
+  }
+  if (response.status === 422) return { productos: [], lectura_parcial: true };
+  if (!response.ok || !Array.isArray(data?.productos)) throw Error(data?.error || 'No se completó la lectura con IA. Puedes usar el lector básico.');
+  return data;
+}
+
 $('ai').onclick = () => {
   const endpoint = $('endpoint').value.trim() || DEFAULT_AI_ENDPOINT;
   if (!validEndpoint(endpoint)) {
@@ -369,21 +413,27 @@ $('ai').onclick = () => {
   }
   return withInvoice(async canvas => {
     const image = preview(canvas);
-    const details = $('smallPrint').checked ? detailsOf(canvas) : [];
-    const body = JSON.stringify({ image, details });
-    if (body.length >= 8_900_000) throw Error('La foto es muy pesada. Prueba una foto más ligera o lee el ticket por partes.');
+    const useDetails = $('smallPrint').checked;
     $('status').textContent = 'Leyendo los productos y sus importes…';
-    const response = await fetch(endpoint, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
-      signal: AbortSignal.timeout(120000)
-    });
-    const data = await response.json().catch(() => null);
-    if (response.status === 503 && typeof data?.error === 'string' && data.error.includes('OPENAI_API_KEY')) {
-      throw Error('El servidor está conectado. Falta activar la clave de OpenAI en Cloudflare. Puedes usar el lector básico.');
+    let data = await readWithAI(endpoint, image, useDetails ? detailsOf(canvas) : []);
+    let result = invoice.normalize(data);
+    const notes = [];
+    if (!readingIsVerified(result)) {
+      $('status').textContent = 'Verificando de nuevo los renglones y el total con ampliaciones…';
+      try {
+        const source = useDetails ? contrastOf(canvas) : canvas;
+        const reviewed = await readWithAI(endpoint, image, detailsOf(source, .8), true);
+        const candidate = invoice.normalize(reviewed);
+        if (invoice.preferReading(result, candidate)) {
+          result = candidate;
+          data = reviewed;
+        }
+      } catch {
+        notes.push('No se pudo completar la segunda lectura.');
+      }
     }
-    if (!response.ok || !data) throw Error(data?.error || 'No se completó la lectura con IA. Puedes usar el lector básico.');
-    if (!Array.isArray(data.productos) || !data.productos.length) throw Error('La IA no encontró productos. Prueba una foto más cerca.');
-    displayInvoice(invoice.normalize(data), [canvas.dataset.note, ...(Array.isArray(data.observaciones) ? data.observaciones : [])]);
+    result.totals.partial ||= Boolean(canvas.dataset.note);
+    displayInvoice(result, [canvas.dataset.note, ...notes, ...(Array.isArray(data.observaciones) ? data.observaciones : [])]);
   });
 };
 
@@ -393,16 +443,38 @@ $('read').onclick = () => withInvoice(async canvas => {
   $('status').textContent = 'Leyendo texto… puede tardar unos segundos.';
   const worker = await window.Tesseract.createWorker('eng+spa');
   try {
-    const result = await worker.recognize(canvas);
-    $('raw').value = result.data.text;
-    displayInvoice(invoice.parseText(result.data.text), [canvas.dataset.note]);
+    let { data: { text } } = await worker.recognize(canvas);
+    let result = invoice.parseText(text);
+    const notes = [canvas.dataset.note];
+    if (!readingIsVerified(result)) {
+      $('status').textContent = 'Verificando de nuevo los renglones y el total con más contraste…';
+      try {
+        await worker.setParameters({ tessedit_pageseg_mode: window.Tesseract.PSM.SINGLE_BLOCK });
+        const second = await worker.recognize(contrastOf(canvas));
+        const candidate = invoice.parseText(second.data.text);
+        if (invoice.preferReading(result, candidate)) {
+          result = candidate;
+          text = second.data.text;
+        }
+      } catch {
+        notes.push('No se pudo completar la segunda lectura.');
+      }
+    }
+    $('raw').value = text;
+    result.totals.partial ||= Boolean(canvas.dataset.note);
+    displayInvoice(result, notes);
   } finally {
     await worker.terminate();
   }
 });
-$('parse').onclick = () => displayInvoice(invoice.parseText($('raw').value));
+$('parse').onclick = () => {
+  const result = invoice.parseText($('raw').value);
+  result.totals.partial ||= Boolean(totals?.partial);
+  displayInvoice(result);
+};
 $('add').onclick = () => { rows.push({ nombre: '', costo: '', cantidad: '' }); draw(); };
 $('export').onclick = () => {
+  if ($('export').disabled) return;
   const quote = value => {
     let text = String(value ?? '');
     if (/^[=+\-@\t\r]/.test(text)) text = "'" + text;
