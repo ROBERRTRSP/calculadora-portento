@@ -60,7 +60,7 @@
     // Weight/volume lookalikes from receipts such as 16.9OZ -> 16.902.
     const clean = name.replace(/0Z\b/gi, 'oz').replace(/(?<=\d)9r\b/gi, 'gr');
     const patterns = [
-      /\b(\d{1,4})\s*[-/]\s*\d+(?:[.,]\d+)?\s*(?:fl\s*oz|oz|ml|gr|g|gal|lt|l|lb|ct|pk|sticks?|drops?)\b/i,
+      /\b(\d{1,4})\s*[-/]\s*\d+(?:[.,]\d+)?\s*(?:fl\s*oz|oz|ml|gr|g|gal|lt|lit(?:er|re)s?|l|lb|ct|pk|sticks?|drops?)\b/i,
       /\b(\d{1,4})\s*[x/]\s*1\s*$/i,
       /\b(?:case|caja|pack)\s*(?:of|de|x|:)?\s*(\d{1,4})\b/i
     ];
@@ -86,9 +86,9 @@
       const reconstructed = packages && price !== null && price >= 0 ? packages * price : null;
       const cost = line ?? reconstructed;
       const warnings = [];
-      const mismatch = line !== null && reconstructed !== null && line !== reconstructed;
+      const mismatch = raw.importe_dudoso || (line !== null && reconstructed !== null && line !== reconstructed);
       if (directQuantity && computedQuantity && directQuantity !== computedQuantity) warnings.push('Las unidades indicadas difieren de la cantidad de empaques por sus unidades.');
-      if (mismatch) warnings.push('La cantidad comprada por el precio del empaque difiere del importe impreso.');
+      if (mismatch) warnings.push(raw.importe_dudoso ? 'Confirma el importe neto impreso y sus descuentos o cargos.' : 'La cantidad comprada por el precio del empaque difiere del importe impreso.');
       if (!quantity) warnings.push(pcs ? 'Confirma si las piezas impresas corresponden a unidades vendibles.' : 'Confirma las unidades vendibles.');
       if (line === null) warnings.push('Confirma el importe impreso de la línea.');
       if (raw.confianza === 'baja') warnings.push('Lectura dudosa.');
@@ -98,7 +98,7 @@
       return {
         nombre, codigo, codigoTipo: raw.codigo_tipo || '',
         costo: cost === null ? '' : (cost / 100).toFixed(2), cantidad: quantity || '',
-        costUnconfirmed: line === null,
+        costUnconfirmed: line === null || raw.importe_dudoso === true,
         info: parts.join(' · '), warning: warnings.join(' '), review: warnings.length > 0 || raw.confianza === 'media'
       };
     });
@@ -112,11 +112,104 @@
   }
 
   function detectFormat(text) {
+    if (/\bAZ\s+METR[O0]\s+DISTRIBUT|\bCASES\b[^\n]*\bDESCRIPTION\b[^\n]*\b(?:DISCOUNT|DEPOSIT)\b/i.test(text)) return 'azmetro';
     if (/\bJER[A-Z]{2,4}\s+DA[I1]RY\b|ADDS\s*\/\s*CUTS[^\n]*DESCRIPTION|CASE\s*\/\s*UN[I1T]+[^\n]*\bPCS\b/i.test(text)) return 'dairy';
     if (/\bAAA[\s.]+WHOLESALE\b/i.test(text) || (text.match(/^[\s'"]*[IlTt]tem\s*No\s*[.:]+\s*\d{4,8}/gim) || []).length >= 2) return 'aaa';
     if (/\bTA[IÍ1L]NO\s+(?:TRADING|TRAD)|\bUPC\b[^\n]*\b(?:QUANTITY|QTY|PRICE EACH)\b/i.test(text)) return 'taino';
     if (/\bROSAS\s+A\b|\bPRODUCTO[S]?\s+CANT(?:IDAD)?\.?\s+PRECIO\s+TOTAL\b/i.test(text)) return 'rosas';
     return '';
+  }
+
+  function hasForeignCurrency(text) {
+    const codes = '(?:EUR|GBP|CAD|MXN|DOP|JPY|COP|BRL|PEN|ARS|CLP|AUD|CHF|CNY)';
+    const price = '(?:\\d{1,3}(?:[.,]\\d{3})+|\\d{1,9})[.,]\\d{2}(?!\\d)';
+    const label = '(?:[€£¥]|\\b(?:RD|MX|CA|AU)\\$)';
+    return new RegExp(label + '[ \\t]*' + price + '|' + price + '[ \\t]*[€£¥]|\\b' + codes + '[ \\t]+(?:[$€£¥][ \\t]*)?\\d|' + price + '[ \\t]*' + codes + '\\b', 'i').test(text);
+  }
+
+  const azMoney = new RegExp('^' + money + '$', 'i');
+  const azLine = new RegExp('^[|\\s]*([1-9]\\d{0,3})\\s+([0-9]{2,6})\\s+(.+?)\\s+(\\d{11,14})' + ('\\s+' + money).repeat(5) + '$', 'i');
+
+  function azProduct({ cases, name, upc, price, discount, deposit, tax, total }) {
+    name = name.replace(/^[|_\\/\[{]+|[|_]+$/g, '').trim().replace(/\b0[Z2]\b/g, 'OZ')
+      .replace(/^[Z2](?=\s+\d+\s+OZ\s+TALLBOY\b)/i, 'AZ');
+    const pack = count(name.match(/\b(\d{1,3})\s*(?:PK|PACK|P)\b/i)?.[1]) ?? unitsFromDescription(name);
+    const costo = moneyCents(total);
+    const base = moneyCents(price), off = moneyCents(discount), fee = moneyCents(deposit), lineTax = moneyCents(tax);
+    const components = [base, off, fee, lineTax];
+    const inferred = costo !== null && base > 0 && components.every(value => value !== null)
+      ? count((costo + Math.abs(off) - fee - lineTax) / base) : null;
+    const printedCases = count(cases) ?? inferred;
+    const validUpc = isRetailCode(upc);
+    const expected = printedCases && components.every(value => value !== null)
+      ? printedCases * base - Math.abs(off) + fee + lineTax : null;
+    return {
+      nombre: name, codigo: upc, cantidad_comprada: printedCases, unidades_por_empaque: pack,
+      total_linea: total, importe_dudoso: expected !== null && costo !== expected,
+      observacion: [printedCases ? '' : 'Confirma la cantidad de cajas impresa.',
+        validUpc ? '' : 'Confirma el UPC impreso antes de cruzarlo con NRS.'].filter(Boolean).join(' '),
+      codigo_tipo: validUpc ? '' : 'interno'
+    };
+  }
+
+  function isRetailCode(code) {
+    return /^(?:\d{8}|\d{12,14})$/.test(code) && [...code].reverse().reduce((sum, digit, index) => sum + Number(digit) * (index % 2 ? 3 : 1), 0) % 10 === 0;
+  }
+
+  function readAzTable(tableWords, blockWords = tableWords) {
+    // A UPC anchors each row even when the grid splits the description and prices into separate OCR blocks.
+    const x = word => word.x + word.width / 2;
+    const y = word => word.y + word.height / 2;
+    const upcs = tableWords.filter(word => /^\d{11,14}$/.test(word.text)).sort((a, b) => y(a) - y(b));
+    if (upcs.length < 2) return [];
+    const median = values => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
+    const center = median(upcs.map(x));
+    const pitch = median(upcs.slice(1).map((word, i) => y(word) - y(upcs[i])));
+    const height = median(upcs.map(word => word.height));
+    if (pitch < height * 1.1 || upcs.some(word => Math.abs(x(word) - center) > height * 2.5)) return [];
+
+    const prices = tableWords.filter(word => x(word) > center + height * 4 && azMoney.test(word.text));
+    if (!prices.length) return [];
+    const right = Math.max(...prices.map(x));
+    const span = right - center;
+    if (span < height * 18) return [];
+    const leading = blockWords.filter(word => /^(?:[1-9]\d{0,2}|[|!'Il])$/.test(word.text) && x(word) < center - span * .83 && x(word) > center - span * .94);
+    const descriptions = tableWords.filter(word => x(word) > center - span * .72 && word.x + word.width < center - span * .075);
+    const net = prices.filter(word => x(word) > right - span * .08).sort((a, b) => y(a) - y(b));
+    const column = (from, to) => [prices, blockWords].map(words => words.filter(word =>
+      azMoney.test(word.text) && x(word) >= center + span * from && x(word) < center + span * to));
+    const priceColumn = column(.12, .25), discountColumn = column(.32, .47);
+    const depositColumn = column(.48, .65), taxColumn = column(.69, .86);
+    const nearest = (words, rowY, tolerance) => words.reduce((best, word) =>
+      Math.abs(y(word) - rowY) < Math.abs((best ? y(best) : rowY + tolerance) - rowY) ? word : best, null);
+    const products = [];
+    for (const upc of upcs) {
+      const rowY = y(upc);
+      const total = nearest(net, rowY, pitch * .45);
+      if (!total) continue;
+      const description = descriptions.filter(word => Math.abs(y(word) - rowY - (x(word) - center) * .035) < pitch * .40)
+        .sort((a, b) => a.x - b.x).map(word => word.text).join(' ');
+      if (!/[a-z]{3}/i.test(description)) continue;
+      const prices = passes => [...new Set(passes.map(words => nearest(words, rowY, pitch * .40)?.text))];
+      const qty = nearest(leading, rowY - height, pitch * .36)?.text;
+      const deposit = prices(depositColumn).find(Boolean), tax = prices(taxColumn).find(Boolean);
+      const discounts = prices(discountColumn), basePrices = prices(priceColumn);
+      const [base, discount] = basePrices.flatMap(base => discounts.map(discount => [base, discount])).find(([base, discount]) => {
+        const components = [base, discount, deposit, tax].map(moneyCents);
+        if (components.some(value => value === null) || components[0] <= 0) return false;
+        const [price, off, fee, lineTax] = components;
+        const inferredCases = (moneyCents(total.text) + Math.abs(off) - fee - lineTax) / price;
+        return count(qty) ? inferredCases === count(qty) : /[|!'Il]/.test(qty ?? '') ? inferredCases === 1 : count(inferredCases);
+      }) ?? [basePrices.find(Boolean), discounts.find(Boolean)];
+      products.push(azProduct({ cases: qty, name: description, upc: upc.text, total: total.text, price: base, discount, deposit, tax }));
+    }
+    return normalize({ productos: products }).rows;
+  }
+
+  function azFooter(line) {
+    const match = line.replace(/^[\s|_:=~—–*'-]+/, '').match(/^(fuel\s*charges?|surcharge|allowance|deposits|credits|sub\s*total|please pay this\s+amount)\b[\s|_:~—–]*([\s\S]*)$/i);
+    if (!match) return null;
+    return { label: match[1].replace(/\s+/g, ' ').toLowerCase(), tail: match[2].replace(/[|_\s]+$/g, '') };
   }
 
   function parseText(text, { dairy, format = dairy === true ? 'dairy' : detectFormat(text) } = {}) {
@@ -137,6 +230,32 @@
       const rawLine = lines[index];
       const line = rawLine.replace(/^[|\s]+/,'').replace(/\s*\|\s*/g, ' ').replace(/(\d[.,])\s+(?=\d{2}\b)/g, '$1').trim();
       const trimmed = line.replace(/^[\s"'«»~]+|[\s\\|"'<>]+$/g, '');
+      const az = format === 'azmetro' ? azFooter(rawLine) : null;
+      if (az) {
+        const { label, tail } = az;
+        const printed = (tail || lines[index + 1] || '').match(amountOnly)?.[1];
+        if (printed !== undefined) {
+          if (!tail) index++;
+          if (/^sub\s*total$/.test(label)) genericTotal = printed;
+          else if (label === 'please pay this amount') total = printed;
+          else {
+            const cents = moneyCents(printed);
+            const value = label === 'allowance' || label === 'credits' ? -Math.abs(cents) : cents;
+            if (value !== 0) adjustments.push({ importe: value / 100 });
+          }
+        } else if (tail && /\d/.test(tail) && /^(?:fuel|surcharge|allowance|deposits|credits)/.test(label)) {
+          adjustments.push({ importe: null });
+        }
+        continue;
+      }
+      if (format === 'azmetro') {
+        const azRow = trimmed.replace(/^[^\d]+/, '').match(azLine);
+        if (azRow) {
+          const [, cases, , name, upc, price, discount, deposit, tax, total] = azRow;
+          products.push(azProduct({ cases, name, upc, price, discount, deposit, tax, total }));
+          continue;
+        }
+      }
       const adjustmentMatch = line.match(adjustmentLabel);
       const totalMatch = !adjustmentMatch && trimmed.match(totalLabel);
       if (adjustmentMatch || totalMatch) {
@@ -220,7 +339,7 @@
       if (recent.length > 2) recent.shift();
     }
     const result = normalize({ productos: products, subtotal_productos: subtotal, total_factura: total ?? genericTotal, ajustes: adjustments });
-    result.totals.foreignCurrency = /[€£¥]|\b(?:EUR|GBP|CAD|MXN|DOP|JPY|COP|BRL|PEN|ARS|CLP|AUD|CHF|CNY)\s*(?:\$\s*)?\d|\d[.,]\d{2}\s+(?:EUR|GBP|CAD|MXN|DOP|JPY|COP|BRL|PEN|ARS|CLP|AUD|CHF|CNY)\b|\b(?:RD|MX|CA|AU)\$/.test(text);
+    result.totals.foreignCurrency = hasForeignCurrency(text);
     return result;
   }
 
@@ -381,7 +500,7 @@
     return Number.isFinite(unitPriceInCents) ? Math.max(0, Math.ceil(unitPriceInCents - 1e-9)) / 100 : null;
   }
 
-  const invoice = { normalize, parseText, suggestedPrice, priceWithMarkup, moneyCents, reconcile, preferReading, detectFormat, readColumns, tsvWords, chooseTableReading, readEmbeddedInvoice,
+  const invoice = { normalize, parseText, suggestedPrice, priceWithMarkup, moneyCents, reconcile, preferReading, detectFormat, readColumns, tsvWords, chooseTableReading, readEmbeddedInvoice, readAzTable,
     isDairyInvoice: text => detectFormat(text) === 'dairy' };
   if (typeof module === 'object') module.exports = invoice;
   else window.PorcentoFactura = invoice;

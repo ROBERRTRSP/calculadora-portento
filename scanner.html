@@ -70,6 +70,7 @@
             <option value="aaa">AAA Wholesale</option>
             <option value="taino">Taíno Trading</option>
             <option value="rosas">Rosas Distribution</option>
+            <option value="azmetro">AZ Metro Distributors</option>
           </select>
           <small class="caption" id="formatHint">Incluye los encabezados de la tabla y los importes. Si el total quedó fuera, añade una foto del total de la misma factura.</small>
           <button id="takeTotalPhoto" type="button">Tomar foto del total</button>
@@ -116,7 +117,7 @@
       </div>
     </details>
   </main>
-  <script src="./factura.js?v=18"></script>
+  <script src="./factura.js?v=19"></script>
   <script src="./pricebook.js?v=18"></script>
   <script>
 const $ = id => document.getElementById(id);
@@ -485,7 +486,7 @@ async function readCanvas(file) {
   }
 }
 
-function ocrRegion(source, top, bottom, start = .09, end = .91, magnify = 2) {
+function ocrRegion(source, top, bottom, start = .09, end = .91, magnify = 2, rotation = 0) {
   const crop = document.createElement('canvas');
   const left = Math.round(source.width * start);
   const width = Math.round(source.width * end) - left;
@@ -498,8 +499,18 @@ function ocrRegion(source, top, bottom, start = .09, end = .91, magnify = 2) {
   context.fillStyle = '#fff';
   context.fillRect(0, 0, crop.width, crop.height);
   context.imageSmoothingQuality = 'high';
-  context.drawImage(source, left, Math.round(top * source.height), width, height,
-    border, border, crop.width - border * 2, crop.height - border * 2);
+  if (rotation) {
+    context.save();
+    context.translate(border - left * scale, border - Math.round(top * source.height) * scale);
+    context.scale(scale, scale);
+    context.translate(source.width / 2, source.height / 2);
+    context.rotate(rotation * Math.PI / 180);
+    context.drawImage(source, -source.width / 2, -source.height / 2);
+    context.restore();
+  } else {
+    context.drawImage(source, left, Math.round(top * source.height), width, height,
+      border, border, crop.width - border * 2, crop.height - border * 2);
+  }
 
   const image = context.getImageData(0, 0, crop.width, crop.height);
   const pixels = image.data;
@@ -530,7 +541,8 @@ const formatHints = {
   dairy: 'Incluye ITEM, DESCRIPTION, PCS y AMOUNT. Fotografía la línea Total This Invoice si quedó fuera.',
   aaa: 'Incluye el número de artículo, su descripción y el renglón con la cantidad y el importe de cada producto.',
   taino: 'Incluye desde la columna UPC hasta Amount. Fotografía Invoice Total si quedó fuera.',
-  rosas: 'Incluye las columnas Producto, Cant, Precio y Total. Fotografía Total Neto si quedó fuera.'
+  rosas: 'Incluye las columnas Producto, Cant, Precio y Total. Fotografía Total Neto si quedó fuera.',
+  azmetro: 'Incluye la tabla desde Cases hasta Total y el recuadro con Fuel Charges y Sub Total.'
 };
 const defaultFormatHint = $('formatHint').textContent;
 $('invoiceFormat').onchange = () => {
@@ -606,6 +618,63 @@ function preview(canvas) {
   return image;
 }
 
+async function scanAzMetro(canvas, worker, modes, initial, separateTotals) {
+  const words = invoice.tsvWords(initial.tsv);
+  const label = words.find(word => /^description$/i.test(word.text));
+  const end = words.find(word => /^charges$/i.test(word.text) && word.y > canvas.height * .45);
+  const tableTop = label ? Math.max(0, label.y / canvas.height - .032) : .21;
+  const tableBottom = Math.min(1, tableTop + .163);
+  const footerTop = end ? Math.max(.30, end.y / canvas.height - .11) : .57;
+  const parse = text => invoice.parseText(text, { format: 'azmetro' });
+  let reading = parse(initial.text);
+  const initialTotals = reading.totals;
+  let text = '';
+  let footer = separateTotals;
+  const read = async (image, psm) => {
+    await worker.setParameters({ tessedit_pageseg_mode: psm, preserve_interword_spaces: '1' });
+    return (await worker.recognize(image, {}, { text: true, tsv: true })).data;
+  };
+
+  const footerRegions = [[.64, .95, .215, 4], [.59, .98, .28, 0], [.59, 1, .28, -4]];
+  for (const [left, right, span, rotation] of footerRegions) {
+    if (footer?.total != null) break;
+    const scan = await read(ocrRegion(canvas, footerTop, Math.min(1, footerTop + span), left, right, 2, rotation), modes.SINGLE_BLOCK);
+    const candidate = parse(scan.text).totals;
+    if (candidate.total !== null) {
+      footer = candidate;
+      text = scan.text;
+    }
+  }
+
+  let bestText = initial.text;
+  const tableRegions = [
+    [tableTop, tableBottom, .08, .924, 2, 4],
+    [tableTop, tableBottom, .08, .94, 2, 2],
+    [tableTop, Math.min(1, tableBottom + .08), 0, 1, 2, 0],
+    [0, Math.min(1, tableBottom + .14), 0, 1, 2, -4],
+    [0, 1, 0, 1, 2, 0]
+  ];
+  for (const region of tableRegions) {
+    const image = ocrRegion(canvas, ...region);
+    const sparse = await read(image, modes.SPARSE_TEXT);
+    const block = await read(image, modes.SINGLE_BLOCK);
+    const lines = block.text + '\n' + text;
+    const parsed = parse(lines);
+    const recovered = invoice.readAzTable(invoice.tsvWords(sparse.tsv), invoice.tsvWords(block.tsv));
+    const totals = footer?.total != null ? { ...footer } : { ...reading.totals, total: reading.totals.total ?? parsed.totals.total };
+    if (footer?.total != null && initialTotals.total !== null && initialTotals.total !== footer.total) totals.conflictingTotal = true;
+    if (footer?.total != null && !footer.adjustments.length && initialTotals.adjustments.length) totals.adjustments = initialTotals.adjustments;
+    totals.foreignCurrency ||= reading.totals.foreignCurrency || parsed.totals.foreignCurrency;
+    const candidate = invoice.chooseTableReading({ rows: parsed.rows, totals }, { rows: recovered, totals });
+    if (invoice.preferReading(reading, candidate)) {
+      reading = candidate;
+      bestText = lines;
+    }
+    if (readingIsVerified(reading)) break;
+  }
+  return { reading, text: bestText, notes: [] };
+}
+
 async function scanPage(canvas, getWorker, totalPhoto) {
   const selectedFormat = $('invoiceFormat').value;
   const embedded = invoice.readEmbeddedInvoice(canvas.invoiceWords, selectedFormat);
@@ -672,6 +741,11 @@ async function scanPage(canvas, getWorker, totalPhoto) {
     } catch {
       notes.push('No se pudo leer la segunda foto. Puedes escribir el total abajo.');
     }
+  }
+  if (format === 'azmetro' && !canvas.pdfMultiple) {
+    $('status').textContent = 'Leyendo las columnas y los descuentos de AZ Metro…';
+    const az = await scanAzMetro(canvas, worker, Tesseract.PSM, firstScan, separateTotals);
+    return { ...az, notes };
   }
   consider(firstText);
   if (!readingIsVerified(result)) consider(firstText, separateTotals, invoice.tsvWords(firstScan.tsv));
