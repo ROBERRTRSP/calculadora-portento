@@ -14,6 +14,14 @@
     #catalogList .row > div { min-width: 0; }
     #catalogList h3 { overflow-wrap: anywhere; margin-bottom: 3px; }
     #catalogList .row button { flex: none; }
+    .catalog-item { flex: 1; display: flex; gap: 9px; align-items: center; }
+    .catalog-item > div { min-width: 0; }
+    .catalog-thumbnail, .catalog-photo-placeholder { flex: none; width: 58px; height: 58px; border-radius: 9px; background: var(--field); }
+    .catalog-thumbnail { object-fit: contain; }
+    .catalog-photo-placeholder { display: grid; place-items: center; color: var(--muted); }
+    #productPhotoField { margin: 12px 0 0; padding: 0; border: 0; min-width: 0; }
+    #productPhotoField legend { font-size: 13px; font-weight: 650; padding: 0; }
+    #productPhotoPreview { display: block; width: min(100%, 210px); max-height: 180px; object-fit: contain; background: var(--field); border-radius: 11px; margin-top: 6px; }
   </style>
 </head>
 <body>
@@ -37,6 +45,17 @@
           <label for="productCode">UPC / EAN <small>(opcional)</small></label>
           <input id="productCode" inputmode="numeric" autocomplete="off">
         </div>
+        <fieldset id="productPhotoField">
+          <legend>Foto del producto</legend>
+          <img id="productPhotoPreview" alt="Vista previa de la foto del producto" hidden>
+          <div class="actions">
+            <button id="takeProductPhoto" type="button">Tomar foto</button>
+            <button id="chooseProductPhoto" type="button">Elegir foto</button>
+          </div>
+          <input id="productCameraFile" type="file" accept="image/*" capture="environment" hidden>
+          <input id="productPhotoFile" type="file" accept="image/*" hidden>
+          <p id="photoStatus" class="status" role="status"></p>
+        </fieldset>
         <div class="fields field">
           <div class="field">
             <label for="productCost">Costo por unidad ($)</label>
@@ -63,7 +82,7 @@
     </section>
   </main>
   <script src="./factura.js?v=20"></script>
-  <script src="./catalogo.js?v=23"></script>
+  <script src="./catalogo.js?v=25"></script>
   <script src="./barcode.js?v=24"></script>
   <script>
     const $ = id => document.getElementById(id);
@@ -74,14 +93,96 @@
     let products = [];
     let editing = null;
     let saving = false;
+    let productPhoto = null;
+    let previewUrl;
+    let thumbnailUrls = [];
+    let photoRequest = 0;
+
+    function showPhoto(photo) {
+      const image = $('productPhotoPreview');
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      previewUrl = photo ? URL.createObjectURL(photo) : null;
+      image.hidden = !previewUrl;
+      if (previewUrl) image.src = previewUrl;
+      else image.removeAttribute('src');
+    }
+
+    async function resizePhoto(file) {
+      const url = URL.createObjectURL(file);
+      try {
+        const image = new Image();
+        await new Promise((resolve, reject) => {
+          image.onload = resolve;
+          image.onerror = reject;
+          image.src = url;
+        });
+        const scale = Math.min(1, 900 / Math.max(image.naturalWidth, image.naturalHeight));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+        canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+        return await new Promise((resolve, reject) => {
+          canvas.toBlob(blob => blob ? resolve(blob) : reject(Error('Foto ilegible')), 'image/jpeg', .82);
+        });
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    }
+
+    async function selectPhoto(input) {
+      const file = input.files?.[0];
+      input.value = '';
+      if (!file) return;
+      const request = ++photoRequest;
+      const status = $('photoStatus');
+      status.textContent = 'Preparando foto…';
+      $('saveProduct').disabled = true;
+      try {
+        const photo = await resizePhoto(file);
+        if (request !== photoRequest) return;
+        productPhoto = photo;
+        showPhoto(photo);
+        status.textContent = '';
+      } catch {
+        if (request === photoRequest) status.textContent = 'No pude abrir la foto. Toma otra o elige una imagen JPEG o PNG.';
+      } finally {
+        if (request === photoRequest) $('saveProduct').disabled = false;
+      }
+    }
+
+    for (const [buttonId, inputId] of [['takeProductPhoto', 'productCameraFile'], ['chooseProductPhoto', 'productPhotoFile']]) {
+      const input = $(inputId);
+      $(buttonId).onclick = () => input.click();
+      input.onchange = () => selectPhoto(input);
+    }
 
     function showProducts() {
+      for (const url of thumbnailUrls) URL.revokeObjectURL(url);
+      thumbnailUrls = [];
       const query = catalog.searchKey($('catalogSearch').value);
       const matches = products.filter(product => catalog.searchKey(product.name).includes(query) || product.code.includes(query));
       $('catalogEmpty').textContent = matches.length ? '' : query ? 'No se encontraron productos.' : 'Todavía no hay productos guardados.';
       $('catalogList').replaceChildren(...matches.map(product => {
         const row = document.createElement('li');
         row.className = 'row';
+        const item = document.createElement('div');
+        item.className = 'catalog-item';
+        const thumbnail = document.createElement(product.photo ? 'img' : 'span');
+        if (product.photo) {
+          const url = URL.createObjectURL(product.photo);
+          thumbnailUrls.push(url);
+          thumbnail.className = 'catalog-thumbnail';
+          thumbnail.alt = 'Foto de ' + product.name;
+          thumbnail.loading = 'lazy';
+          thumbnail.src = url;
+        } else {
+          thumbnail.className = 'catalog-photo-placeholder';
+          thumbnail.setAttribute('aria-hidden', 'true');
+          thumbnail.innerHTML = '<svg class="icon" viewBox="0 0 24 24"><path d="M4 7h4l2-3h4l2 3h4a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2Z"/><circle cx="12" cy="13" r="3.5"/></svg>';
+        }
         const info = document.createElement('div');
         const name = document.createElement('h3');
         name.textContent = product.name;
@@ -99,11 +200,12 @@
         }
         const button = document.createElement('button');
         button.type = 'button';
-        button.textContent = 'Editar';
-        button.setAttribute('aria-label', 'Editar ' + product.name);
+        button.textContent = product.photo ? 'Editar' : 'Añadir foto';
+        button.setAttribute('aria-label', product.photo ? 'Editar ' + product.name : 'Añadir foto a ' + product.name);
         button.onclick = () => openEditor(product);
         info.append(name, code, prices);
-        row.append(info, button);
+        item.append(thumbnail, info);
+        row.append(item, button);
         return row;
       }));
     }
@@ -120,6 +222,11 @@
     function openEditor(product = null) {
       if (saving) return;
       editing = product;
+      photoRequest++;
+      productPhoto = product?.photo ?? null;
+      showPhoto(productPhoto);
+      $('saveProduct').disabled = false;
+      $('photoStatus').textContent = '';
       $('editorTitle').textContent = product ? 'Editar producto' : 'Añadir producto';
       $('productName').value = product?.name ?? '';
       $('productCode').value = product?.code ?? '';
@@ -133,6 +240,9 @@
 
     function closeEditor() {
       editing = null;
+      photoRequest++;
+      productPhoto = null;
+      showPhoto(null);
       editor.hidden = true;
       $('newProduct').focus();
     }
@@ -148,13 +258,19 @@
     $('catalogSearch').oninput = showProducts;
     editor.onsubmit = async event => {
       event.preventDefault();
+      if (saving || $('saveProduct').disabled) return;
+      if (!productPhoto) {
+        $('photoStatus').textContent = 'Añade una foto para guardar el producto.';
+        $('takeProductPhoto').focus();
+        return;
+      }
       const costText = $('productCost').value.trim();
       const cost = costText ? Number(costText.replace(',', '.')) : null;
       if (costText && (!/^\d+(?:[.,]\d+)?$/.test(costText) || !Number.isFinite(cost))) {
         $('editorStatus').textContent = 'Escribe un costo válido por unidad.';
         return;
       }
-      const input = { name: $('productName').value, code: $('productCode').value, cost, sale: $('productSale').value };
+      const input = { name: $('productName').value, code: $('productCode').value, cost, sale: $('productSale').value, photo: productPhoto };
       lockEditor(true);
       try {
         const result = await catalog.save(input, { previousKey: editing?.key, expected: editing?.updated });

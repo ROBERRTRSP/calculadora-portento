@@ -46,7 +46,11 @@
         (purchase.units !== null && (!Number.isSafeInteger(purchase.units) || purchase.units < 1)))) {
       throw Error('Revisa el costo de compra y las unidades.');
     }
-    return { key: code ? 'upc:' + code : 'nombre:' + nameKey(name), name, code, cost: input.cost ?? null, sale, purchase };
+    const photo = input.photo ?? null;
+    if (photo && (photo.type !== 'image/jpeg' || !photo.size || photo.size > 1024 * 1024)) {
+      throw Error('Elige una foto válida del producto.');
+    }
+    return { key: code ? 'upc:' + code : 'nombre:' + nameKey(name), name, code, cost: input.cost ?? null, sale, purchase, photo };
   }
 
   async function save(input, { previousKey, expected, fromInvoice = false, preserveMissing = fromInvoice } = {}) {
@@ -70,6 +74,7 @@
             ...product,
             cost,
             purchase: product.purchase ?? (cost === previous?.cost ? previous.purchase ?? null : null),
+            photo: product.photo ?? previous?.photo ?? null,
             sale: product.sale ?? (keep ? existing.sale : null),
             updated: Math.max(Date.now(), (existing?.updated ?? 0) + 1)
           };
