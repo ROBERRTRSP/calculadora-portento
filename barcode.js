@@ -27,7 +27,7 @@
     });
   }
 
-  function scanInto(input) {
+  function scanInto(input, onScan) {
     const dialog = document.createElement('dialog');
     dialog.className = 'barcode-dialog';
     dialog.setAttribute('aria-label', 'Escanear código de barras');
@@ -62,7 +62,8 @@
       if (!/^\d{8,14}$/.test(code) || !dialog.open || !input.isConnected) return false;
       dialog.close();
       input.value = code;
-      input.dispatchEvent(new Event('input', { bubbles: true }));
+      if (onScan) onScan(code);
+      else input.dispatchEvent(new Event('input', { bubbles: true }));
       return true;
     }
 
@@ -129,14 +130,14 @@
     }, { once: true });
   }
 
-  function addButton(input) {
+  function addButton(input, onScan) {
     const field = document.createElement('div');
     field.className = 'barcode-field';
     const button = document.createElement('button');
     button.type = 'button';
     button.setAttribute('aria-label', 'Escanear código de barras con la cámara');
     button.innerHTML = '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h4l2-3h4l2 3h4a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2Z"/><circle cx="12" cy="13" r="3.5"/></svg>';
-    button.onclick = () => scanInto(input);
+    button.onclick = () => scanInto(input, onScan);
     input.replaceWith(field);
     field.append(input, button);
   }

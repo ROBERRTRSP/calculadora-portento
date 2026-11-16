@@ -85,23 +85,30 @@
     </section>
     <section class="card" aria-label="Productos guardados">
       <label for="catalogSearch">Buscar productos guardados</label>
-      <input id="catalogSearch" type="search" placeholder="Nombre o código">
-      <ul id="catalogList"></ul>
+      <input id="catalogSearch" type="search" placeholder="Nombre o código" autocomplete="off">
       <p id="catalogEmpty" class="status" role="status"></p>
+      <ul id="catalogList"></ul>
     </section>
   </main>
   <script src="./factura.js?v=20"></script>
   <script src="./catalogo.js?v=27"></script>
-  <script src="./barcode.js?v=24"></script>
+  <script src="./barcode.js?v=28"></script>
   <script>
     const $ = id => document.getElementById(id);
     const catalog = window.PorcentoCatalogo;
     const invoice = window.PorcentoFactura;
     window.PorcentoBarcode.addButton($('productCode'));
+    const catalogSearch = $('catalogSearch');
+    window.PorcentoBarcode.addButton(catalogSearch, code => {
+      scannedCode = code;
+      showProducts();
+    });
     const editor = $('catalogEditor');
     const number = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
     const dateFormat = new Intl.DateTimeFormat('es-US', { dateStyle: 'medium' });
     let products = [];
+    let scannedCode = '';
+    let catalogState = 'loading';
     let editing = null;
     let saving = false;
     let productPhoto = null;
@@ -174,9 +181,16 @@
     function showProducts() {
       for (const url of thumbnailUrls) URL.revokeObjectURL(url);
       thumbnailUrls = [];
-      const query = catalog.searchKey($('catalogSearch').value);
-      const matches = products.filter(product => catalog.searchKey(product.name).includes(query) || product.code.includes(query));
-      $('catalogEmpty').textContent = matches.length ? '' : query ? 'No se encontraron productos.' : 'Todavía no hay productos guardados.';
+      const query = catalog.searchKey(catalogSearch.value);
+      const productByCode = scannedCode && (products.find(product => product.code === scannedCode) ??
+        products.find(product => catalog.barcodeKey(product.code) === catalog.barcodeKey(scannedCode)));
+      const matches = scannedCode ? (productByCode ? [productByCode] : []) :
+        products.filter(product => catalog.searchKey(product.name).includes(query) || product.code.includes(query));
+      const status = $('catalogEmpty');
+      if (catalogState === 'unavailable') status.textContent = scannedCode ? 'No se pudo consultar Mi catálogo.' : '';
+      else if (catalogState === 'loading') status.textContent = scannedCode ? 'Cargando Mi catálogo…' : '';
+      else if (scannedCode) status.textContent = productByCode ? 'Encontrado en Mi catálogo.' : 'Este código no está en Mi catálogo.';
+      else status.textContent = matches.length ? '' : query ? 'No se encontraron productos.' : 'Todavía no hay productos guardados.';
       $('catalogList').replaceChildren(...matches.map(product => {
         const row = document.createElement('li');
         row.className = 'row';
@@ -249,6 +263,7 @@
     async function loadProducts() {
       try {
         products = await catalog.list();
+        catalogState = 'ready';
         showProducts();
         if (selectedKey) {
           const product = products.find(item => item.key === selectedKey);
@@ -256,7 +271,9 @@
           if (product) openEditor(product);
         }
       } catch {
+        catalogState = 'unavailable';
         $('catalogStatus').textContent = 'El catálogo no está disponible en este navegador.';
+        showProducts();
       }
     }
 
@@ -312,7 +329,10 @@
 
     $('newProduct').onclick = () => openEditor();
     $('cancelProduct').onclick = closeEditor;
-    $('catalogSearch').oninput = showProducts;
+    catalogSearch.oninput = () => {
+      scannedCode = '';
+      showProducts();
+    };
     $('productCost').oninput = showUnitCost;
     $('productUnits').oninput = showUnitCost;
     $('productSale').oninput = showUnitCost;
