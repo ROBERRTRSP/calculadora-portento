@@ -10,7 +10,6 @@
   <style>
     .scan-actions { margin-bottom: 9px; }
     #lookup { align-self: end; }
-    #video, #qr-reader { width: 100%; max-height: 270px; background: #141414; border-radius: 12px; overflow: hidden; margin-top: 8px; }
     #name { margin-top: 2px; }
     .product-name { margin-top: 9px; }
     #results { margin-top: 4px; font-size: 14px; }
@@ -26,10 +25,8 @@
       <div class="actions scan-actions">
         <button class="primary" id="scan" type="button">Escanear código</button>
         <button id="photoButton" type="button">Leer desde foto</button>
-        <button id="stop" type="button" hidden>Cerrar cámara</button>
       </div>
       <input id="photo" type="file" accept="image/*" capture="environment" hidden>
-      <video id="video" playsinline muted hidden></video>
       <div id="qr-reader" hidden></div>
       <div class="actions">
         <div class="field">
@@ -64,6 +61,7 @@
           <label for="sale">Tu precio por unidad ($)</label>
           <input id="sale" type="number" min="0" step=".01" inputmode="decimal" placeholder="0.00">
         </div>
+        <p class="status" id="priceInputStatus" role="status"></p>
         <div id="results"></div>
         <div class="actions manual-actions">
           <button class="primary" id="saveCatalog" type="button">Guardar en Mi catálogo</button>
@@ -75,21 +73,44 @@
     </details>
 
   </main>
-  <script src="./factura.js?v=20"></script>
-  <script src="./catalogo.js?v=30"></script>
-  <script src="./barcode.js?v=24"></script>
+  <script src="./factura.js?v=31"></script>
+  <script src="./catalogo.js?v=31"></script>
+  <script src="./barcode.js?v=31"></script>
   <script>
 const $ = id => document.getElementById(id);
 const usd = n => '$' + n.toFixed(2);
-let stream = null, detector = null, raf = 0, html5scanner = null, scanning = false;
 function calc() {
-const purchase=Number($('cost').value),qty=Number($('qty').value),sale=Number($('sale').value),hasCost=$('cost').value!==''&&purchase>0,hasSale=$('sale').value!==''&&sale>0,unit=hasCost?(qty>0?purchase/qty:purchase):0;
-let h=hasCost?'<div class="row"><span>Costo por unidad</span><b>'+usd(unit)+'</b></div>'+[33,45,50].map(m=>'<div class="row"><span>Margen '+m+'%</span><b class="value">'+usd(Math.ceil(unit/(1-m/100)*100)/100)+'</b></div>').join(''):'';
-if(hasSale){h+='<div class="row"><span>Tu precio</span><b>'+usd(sale)+'</b></div>';if(hasCost)h+='<div class="row"><span>Ganancia bruta/unidad</span><b>'+usd(sale-unit)+'</b></div><div class="row"><span>Margen bruto</span><b>'+((sale-unit)/sale*100).toFixed(1)+'%</b></div>'}
-if (savedProduct?.cost != null && hasCost && purchaseEdited) {
-  h += '<div class="row"><span>Último costo por unidad</span><b>' + usd(savedProduct.cost) + '</b></div>';
-}
-$('results').innerHTML=h;
+  const purchase = $('cost').value;
+  const units = $('qty').value === '' ? 1 : Number($('qty').value);
+  const validUnits = !$('qty').validity?.badInput && Number.isSafeInteger(units) && units > 0;
+  const unit = !validUnits || $('cost').validity?.badInput ? null :
+    (recoveredUnitCost && !purchaseEdited && recoveredUnitCost.value === purchase
+      ? savedProduct?.cost ?? null : invoice.unitCost(purchase, units));
+  const sale = invoice.moneyCents($('sale').value);
+  const invalidSale = $('sale').validity?.badInput || ($('sale').value !== '' && (sale === null || sale < 0));
+  $('priceInputStatus').textContent = !validUnits ? 'Escribe una cantidad entera mayor que cero.' :
+    $('cost').validity?.badInput || (purchase !== '' && unit === null) ? 'Escribe un costo válido con hasta dos decimales.' :
+    invalidSale ? 'Escribe un precio de venta válido con hasta dos decimales.' : '';
+
+  const output = [];
+  const add = (label, value) => output.push('<div class="row"><span>' + label + '</span><b>' + value + '</b></div>');
+  if (unit !== null) {
+    add('Costo por unidad', usd(unit));
+    // A legacy unit cost without a purchase total is only available as a fractional value.
+    if (invoice.moneyCents(purchase) !== null) {
+      for (const margin of [33, 45, 50]) add('Margen ' + margin + '%', usd(invoice.suggestedPrice(purchase, units, margin)));
+      add('Precio con costo +50%', usd(invoice.priceWithMarkup(purchase, units)));
+    }
+    if (savedProduct?.cost != null && purchaseEdited) add('Último costo por unidad', usd(savedProduct.cost));
+  }
+  if (!invalidSale && sale > 0) {
+    add('Tu precio', usd(sale / 100));
+    if (unit !== null) {
+      add('Ganancia bruta/unidad', usd(sale / 100 - unit));
+      add('Margen bruto', catalog.grossMargin(unit, sale).toFixed(1) + '%');
+    }
+  }
+  $('results').innerHTML = output.join('');
 }
 
 function restore(code, retainDraft = false) {
@@ -265,18 +286,41 @@ async function lookupProduct(automatic = false) {
   $('costDetails').open = true;
   calc();
 }
-async function stop(){scanning=false;cancelAnimationFrame(raf);if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}if(html5scanner){const scanner=html5scanner;html5scanner=null;try{if(scanner.isScanning)await scanner.stop()}catch(e){}try{scanner.clear()}catch(e){}}$('video').hidden=true;$('qr-reader').hidden=true;$('stop').hidden=true;$('scan').hidden=false}
-function foundCode(raw){let code=String(raw||'').replace(/\D/g,'');if(!/^\d{8,14}$/.test(code)||!scanning)return;scanning=false;$('upc').value=code;stop();$('lookup').click()}
-async function tick(){if(!stream||!scanning)return;try{let matches=await detector.detect($('video'));if(matches.length){foundCode(matches[0].rawValue);if(!scanning)return}}catch(e){}raf=requestAnimationFrame(tick)}
-async function nativeCamera(){if(!('BarcodeDetector'in window))throw Error('Lector nativo no disponible');detector=new BarcodeDetector({formats:['ean_13','ean_8','upc_a','upc_e']});stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}},audio:false});$('video').srcObject=stream;$('video').hidden=false;await $('video').play();$('status').textContent='Enfoca el código completo y muévelo despacio.';tick()}
-$('scan').onclick=async()=>{if(!navigator.mediaDevices?.getUserMedia){$('status').textContent='Abre Porcento en Safari o Chrome y concede permiso a la cámara.';return}await stop();scanning=true;$('scan').hidden=true;$('stop').hidden=false;$('status').textContent='Abriendo la cámara trasera…';try{await window.PorcentoBarcode.load();if(!scanning)return;$('qr-reader').hidden=false;html5scanner=window.PorcentoBarcode.createReader('qr-reader');let width=Math.min(320,Math.max(210,Math.floor(window.innerWidth*.78)));await html5scanner.start({facingMode:'environment'},{fps:12,qrbox:{width:width,height:Math.round(width*.42)},disableFlip:true},foundCode,()=>{});$('status').textContent='Coloca el código completo dentro del recuadro.'}catch(e){await stop();scanning=true;$('scan').hidden=true;$('stop').hidden=false;try{await nativeCamera()}catch(e2){await stop();$('status').textContent='No se pudo abrir la cámara. Revisa los permisos o usa «Leer desde foto».'}}};
-$('photoButton').onclick=()=>$('photo').click();
-$('photo').onchange=async()=>{let file=$('photo').files?.[0];if(!file)return;await stop();scanning=true;$('status').textContent='Leyendo el código de la foto…';try{await window.PorcentoBarcode.load();$('qr-reader').hidden=false;html5scanner=window.PorcentoBarcode.createReader('qr-reader');let code=await html5scanner.scanFile(file,true);foundCode(code);if(scanning){await stop();$('status').textContent='No se encontró un código UPC/EAN en la foto.'}}catch(e){await stop();$('status').textContent='No pude leer la foto. Tómala de cerca, recta y sin reflejos.'}finally{$('photo').value=''}};
-$('stop').onclick=stop;window.addEventListener('pagehide',stop);calc();
+const barcode = window.PorcentoBarcode;
+$('scan').onclick = () => barcode.scanInto($('upc'), () => lookupProduct());
+$('photoButton').onclick = () => $('photo').click();
+$('photo').onchange = async () => {
+  const file = $('photo').files?.[0];
+  if (!file) return;
+  $('photo').value = '';
+  $('scan').disabled = $('photoButton').disabled = true;
+  $('status').textContent = 'Leyendo el código de la foto…';
+  const request = ++lookupRequest;
+  clearTimeout(lookupDelay);
+  let reader;
+  try {
+    await barcode.load();
+    $('qr-reader').hidden = false;
+    reader = barcode.createReader('qr-reader');
+    const code = await reader.scanFile(file, false);
+    if (request !== lookupRequest) return;
+    if (!/^\d{8,14}$/.test(code)) {
+      $('status').textContent = 'La foto no muestra un código UPC o EAN legible.';
+      return;
+    }
+    $('upc').value = code;
+    await lookupProduct();
+  } catch {
+    if (request === lookupRequest) $('status').textContent = 'No pude leer la foto. Tómala de cerca, recta y sin reflejos.';
+  } finally {
+    try { reader?.clear(); } catch { /* It may already be cleared. */ }
+    $('qr-reader').hidden = true;
+    $('scan').disabled = $('photoButton').disabled = false;
+  }
+};
+calc();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
-if (new URLSearchParams(location.search).get('escanear') === '1') {
-  $('scan').click();
-}
+if (new URLSearchParams(location.search).get('escanear') === '1') $('scan').click();
   </script>
 </body>
 </html>

@@ -89,10 +89,21 @@
       <p id="catalogEmpty" class="status" role="status"></p>
       <ul id="catalogList"></ul>
     </section>
+    <details class="card">
+      <summary>Respaldo del catálogo</summary>
+      <div class="details-body">
+        <div class="actions">
+          <button id="exportBackup" type="button">Descargar respaldo</button>
+          <button id="importBackup" type="button">Importar respaldo</button>
+        </div>
+        <input id="backupFile" type="file" accept=".json,application/json" hidden>
+        <p class="status" id="backupStatus" role="status"></p>
+      </div>
+    </details>
   </main>
-  <script src="./factura.js?v=20"></script>
-  <script src="./catalogo.js?v=30"></script>
-  <script src="./barcode.js?v=28"></script>
+  <script src="./factura.js?v=31"></script>
+  <script src="./catalogo.js?v=31"></script>
+  <script src="./barcode.js?v=31"></script>
   <script>
     const $ = id => document.getElementById(id);
     const catalog = window.PorcentoCatalogo;
@@ -184,10 +195,11 @@
       for (const url of thumbnailUrls) URL.revokeObjectURL(url);
       thumbnailUrls = [];
       const query = catalog.searchKey(catalogSearch.value);
-      const productByCode = scannedCode && (products.find(product => product.code === scannedCode) ??
-        products.find(product => catalog.barcodeKey(product.code) === catalog.barcodeKey(scannedCode)));
+      const codeQuery = scannedCode || catalogSearch.value.trim().replace(/[\s-]+/g, '');
+      const productByCode = /^\d{8,14}$/.test(codeQuery) &&
+        catalog.matchByCode(codeQuery, new Map(products.filter(product => product.code).map(product => [product.code, product])));
       const matches = scannedCode ? (productByCode ? [productByCode] : []) :
-        products.filter(product => catalog.searchKey(product.name).includes(query) || product.code.includes(query));
+        products.filter(product => product === productByCode || catalog.searchKey(product.name).includes(query) || product.code.includes(query));
       const status = $('catalogEmpty');
       if (catalogState === 'unavailable') status.textContent = scannedCode ? 'No se pudo consultar Mi catálogo.' : '';
       else if (catalogState === 'loading') status.textContent = scannedCode ? 'Cargando Mi catálogo…' : '';
@@ -312,7 +324,10 @@
         return item;
       }));
       editor.hidden = false;
-      $('productName').focus();
+      if (product) {
+        $('editorTitle').tabIndex = -1;
+        $('editorTitle').focus();
+      } else $('productName').focus();
     }
 
     function closeEditor() {
@@ -393,6 +408,43 @@
         lockEditor(false);
       }
       closeEditor();
+    };
+
+    const backupFile = $('backupFile');
+    const backupStatus = $('backupStatus');
+    $('exportBackup').onclick = async () => {
+      $('exportBackup').disabled = true;
+      try {
+        const backup = await catalog.exportBackup();
+        const download = document.createElement('a');
+        download.href = URL.createObjectURL(new Blob([backup], { type: 'application/json' }));
+        download.download = 'porcento-catalogo-' + new Date().toISOString().slice(0, 10) + '.json';
+        download.click();
+        setTimeout(() => URL.revokeObjectURL(download.href), 1000);
+        backupStatus.textContent = 'Respaldo preparado con tus fotos e historial de compras.';
+      } catch {
+        backupStatus.textContent = 'No se pudo descargar el respaldo.';
+      } finally {
+        $('exportBackup').disabled = false;
+      }
+    };
+    $('importBackup').onclick = () => backupFile.click();
+    backupFile.onchange = async () => {
+      const file = backupFile.files?.[0];
+      backupFile.value = '';
+      if (!file) return;
+      $('importBackup').disabled = true;
+      try {
+        const { imported, skipped } = await catalog.importBackup(await file.text());
+        scannedCode = '';
+        catalogSearch.value = '';
+        await loadProducts();
+        backupStatus.textContent = 'Fichas importadas: ' + imported + '. Fichas existentes conservadas: ' + skipped + '.';
+      } catch {
+        backupStatus.textContent = 'No se pudo importar. Revisa que sea un respaldo válido de Porcento.';
+      } finally {
+        $('importBackup').disabled = false;
+      }
     };
 
     window.addEventListener('pageshow', loadProducts);

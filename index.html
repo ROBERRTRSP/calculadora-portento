@@ -12,8 +12,6 @@
   <style>
     .calculator-header { min-height: 44px; margin-bottom: 6px; }
     .calculator-header button { padding-inline: 8px; }
-    .calculator-actions { display: flex; align-items: center; gap: 4px; }
-    .calculator-actions .scan-product { gap: 5px; padding-inline: 9px; }
     .unit { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: baseline; border-bottom: 1px solid var(--hairline); padding-bottom: 7px; }
     .unit h2 { font-size: 15px; }
     .unit .amount { font-size: 21px; }
@@ -27,8 +25,9 @@
     .markup-price { margin-top: 8px; padding-top: 7px; border-top: 1px solid var(--hairline); }
     .sale-results { border-top: 1px solid var(--hairline); margin-top: 8px; padding-top: 7px; }
     .sale-results strong { display: block; }
-    .tools { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .tools { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
     .tools a { min-width: 0; background: var(--surface); border: 1px solid var(--hairline); }
+    @media (max-width: 420px) { .tools a { flex-direction: column; } }
     @media (max-width: 350px) { .tools a { gap: 4px; padding-inline: 6px; font-size: 13px; } }
   </style>
 </head>
@@ -36,13 +35,7 @@
   <main class="app">
     <header class="page-header calculator-header">
       <h1>Porcento</h1>
-      <div class="calculator-actions">
-        <a class="button scan-product" href="./comparador.html?escanear=1#scan" aria-label="Escanear producto">
-          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7V4h4m10 0h4v3M3 17v3h4m10 0h4v-3M7 8v8m3-8v8m4-8v8m3-8v8"/></svg>
-          Escanear
-        </a>
-        <button class="quiet" id="reset" type="button">Limpiar</button>
-      </div>
+      <button class="quiet" id="reset" type="button">Limpiar</button>
     </header>
 
     <form class="card" id="calculator">
@@ -110,10 +103,11 @@
     </nav>
   </main>
 
-  <script src="./factura.js?v=15"></script>
+  <script src="./factura.js?v=31"></script>
   <script>
     const $ = id => document.getElementById(id);
     const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
+    const invoice = window.PorcentoFactura;
     const form = $('calculator');
     const cost = $('cost'), quantity = $('qty'), sale = $('sale');
     const margins = [33, 45, 50];
@@ -126,26 +120,28 @@
 
     function calculate() {
       const units = quantity.value === '' ? 1 : quantity.valueAsNumber;
-      const validUnits = !quantity.validity.badInput && Number.isInteger(units) && units > 0;
-      const purchase = cost.valueAsNumber;
-      const unit = purchase / units;
-      const validCost = Number.isFinite(unit) && purchase >= 0 && validUnits;
-      $('saveCalculation').disabled = !validCost;
+      const validUnits = !quantity.validity.badInput && Number.isSafeInteger(units) && units > 0;
+      const unit = validUnits ? invoice.unitCost(cost.value, units) : null;
+      const validCost = unit !== null;
+      const saleCents = invoice.moneyCents(sale.value);
+      const invalidSale = sale.validity.badInput || (sale.value !== '' && (saleCents === null || saleCents < 0));
+      $('saveCalculation').disabled = !validCost || invalidSale;
       $('inputStatus').textContent = !validUnits ? 'Escribe una cantidad entera mayor que cero.'
-        : purchase < 0 ? 'El costo debe ser de $0 o más.' : '';
+        : (cost.validity.badInput || (cost.value !== '' && !validCost)) ? 'Escribe un costo válido con hasta dos decimales.'
+        : invalidSale ? 'Escribe un precio de venta válido con hasta dos decimales.' : '';
       $('unit').textContent = validCost ? money.format(unit) : '—';
-      const markupPrice = validCost ? window.PorcentoFactura.priceWithMarkup(purchase, units) : null;
+      const markupPrice = validCost ? invoice.priceWithMarkup(cost.value, units) : null;
       $('markupPrice').textContent = markupPrice === null ? '—' : money.format(markupPrice);
 
       margins.forEach((margin, index) => {
         const [, amount, profit] = suggestions[index].children;
-        const price = Math.ceil((unit / (1 - margin / 100) - 1e-10) * 100) / 100;
-        amount.textContent = validCost ? money.format(price) : '—';
-        profit.hidden = !validCost;
-        profit.textContent = validCost ? money.format(price - unit) + ' ganancia' : '';
+        const price = validCost ? invoice.suggestedPrice(cost.value, units, margin) : null;
+        amount.textContent = price === null ? '—' : money.format(price);
+        profit.hidden = price === null;
+        profit.textContent = price === null ? '' : money.format(price - unit) + ' ganancia';
       });
 
-      const price = sale.valueAsNumber;
+      const price = invalidSale || saleCents === null ? 0 : saleCents / 100;
       $('custom').hidden = !(validCost && price > 0);
       if (!$('custom').hidden) {
         const profit = price - unit;
@@ -159,8 +155,7 @@
     form.addEventListener('submit', event => event.preventDefault());
     $('saveCalculation').onclick = () => {
       const units = quantity.value === '' ? 1 : quantity.valueAsNumber;
-      const unitCost = cost.valueAsNumber / units;
-      if (!Number.isFinite(unitCost) || unitCost < 0 || !Number.isInteger(units) || units < 1) return;
+      if ($('saveCalculation').disabled) return;
       const draft = new URLSearchParams({ compra: cost.value, unidades: String(units), venta: sale.value });
       location.href = './catalogo.html#' + draft;
     };

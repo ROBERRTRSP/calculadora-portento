@@ -268,6 +268,8 @@
           else if (/^sub\s*total/i.test(label)) subtotal = value;
           else if (/^total$/i.test(label)) genericTotal = value;
           else total = value;
+        } else if (adjustmentMatch && (tail || !totalText || !/[a-z]{3}/i.test(totalText))) {
+          adjustments.push({ importe: null });
         }
         continue;
       }
@@ -489,17 +491,22 @@
     return cents !== null && cents >= 0 && units !== null ? cents / 100 / units : null;
   }
 
+  function roundedPrice(cost, quantity, numerator, denominator) {
+    const cents = moneyCents(cost);
+    const units = count(quantity);
+    if (cents === null || cents < 0 || units === null || denominator <= 0) return null;
+    const top = BigInt(cents) * BigInt(numerator);
+    const bottom = BigInt(units) * BigInt(denominator);
+    return Number((top + bottom - 1n) / bottom) / 100;
+  }
+
   function suggestedPrice(cost, quantity, margin) {
-    const perUnit = unitCost(cost, quantity);
-    return perUnit > 0 ? Math.ceil((perUnit / (1 - margin / 100) - 1e-9) * 100) / 100 : null;
+    if (!Number.isInteger(margin) || margin < 0 || margin >= 100) return null;
+    return roundedPrice(cost, quantity, 100, 100 - margin);
   }
 
   function priceWithMarkup(cost, quantity) {
-    const purchase = amount(cost);
-    const units = count(quantity);
-    if (purchase === null || units === null) return null;
-    const unitPriceInCents = purchase / units * 150;
-    return Number.isFinite(unitPriceInCents) ? Math.max(0, Math.ceil(unitPriceInCents - 1e-9)) / 100 : null;
+    return roundedPrice(cost, quantity, 3, 2);
   }
 
   const invoice = { normalize, parseText, unitCost, suggestedPrice, priceWithMarkup, moneyCents, reconcile, preferReading, detectFormat, readColumns, tsvWords, chooseTableReading, readEmbeddedInvoice, readAzTable,

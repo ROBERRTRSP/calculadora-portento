@@ -89,6 +89,11 @@
       <form id="printedTotalEntry" hidden>
         <label for="printedTotal">Total impreso en la factura ($)</label>
         <input id="printedTotal" type="text" inputmode="decimal" placeholder="0.00" autocomplete="off">
+        <div id="adjustmentEntry" class="field" hidden>
+          <label for="printedAdjustments">Ajustes impresos en total ($)</label>
+          <input id="printedAdjustments" type="text" inputmode="decimal" placeholder="Ej. 2.50 o -1.00" autocomplete="off" aria-describedby="adjustmentHelp">
+          <p class="caption" id="adjustmentHelp">Suma los cargos y resta los descuentos que aparecen fuera de los renglones.</p>
+        </div>
         <button type="submit">Comprobar total</button>
         <p id="totalInputStatus" class="status" role="status"></p>
       </form>
@@ -114,9 +119,9 @@
       </div>
     </details>
   </main>
-  <script src="./factura.js?v=20"></script>
-  <script src="./catalogo.js?v=27"></script>
-  <script src="./barcode.js?v=24"></script>
+  <script src="./factura.js?v=31"></script>
+  <script src="./catalogo.js?v=31"></script>
+  <script src="./barcode.js?v=31"></script>
   <script>
 const $ = id => document.getElementById(id);
 const money = n => Number.isFinite(n) ? '$' + n.toFixed(2) : '—';
@@ -127,6 +132,7 @@ let nextSourceLine = 0;
 const catalog = window.PorcentoCatalogo;
 let catalogProducts = new Map();
 let invoiceSource = {};
+let analyzedText = '';
 let invoiceReadRequest = 0;
 let manualInvoiceId = crypto.randomUUID();
 const supplierNames = {
@@ -137,16 +143,32 @@ const supplierNames = {
 function documentSource(text, format = '') {
   const supplier = supplierNames[format || invoice.detectFormat(text)] ?? '';
   const number = text.match(/\b(?:delivery|invoice)\s*(?:no\.?|number|#)[:. \t]*[\r\n \t]*([A-Z0-9-]{5,})\b/i)?.[1] ?? '';
-  const date = text.match(/\b(\d{1,2})[/-](\d{1,2})[/-](20\d{2})\b/);
+  const date = text.match(/\b(?:invoice date|delivery date|fecha(?: de (?:factura|entrega))?|date)\s*[:# ]*\s*(\d{1,2})[/-](\d{1,2})[/-](20\d{2})\b/i)
+    ?? text.match(/\b(\d{1,2})[/-](\d{1,2})[/-](20\d{2})\b/);
   const day = date ? new Date(Number(date[3]), Number(date[1]) - 1, Number(date[2]), 12) : null;
   const dateValue = day && day.getMonth() + 1 === Number(date[1]) && day.getDate() === Number(date[2]) ? day.getTime() : null;
   return { supplier, number: supplier && /\d/.test(number) ? number : '', date: dateValue };
 }
 
 const rowCode = row => row.codigoTipo === 'interno' ? '' : String(row.codigo ?? '').trim().replace(/[\s-]+/g, '');
+const normalizedText = text => text.trim().replace(/\r/g, '').replace(/[ \t]+/g, ' ');
+const invoiceNumberId = source => source.number ? source.supplier + ':' + source.number.toUpperCase() : '';
+async function fingerprint(data) {
+  const hash = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, '0')).join('');
+}
 const recordId = row => (invoiceSource.id ?? manualInvoiceId) + ':' + row.sourceLine;
 const rowCost = (row, verified) => verified && !row.review && !row.costUnconfirmed ? invoice.unitCost(row.costo, row.cantidad) : null;
 const codeMatches = code => /^\d{8,14}$/.test(code);
+function rowProblem(row, verified) {
+  if (!(row.nombre ?? '').trim()) return 'Escribe el nombre del producto.';
+  if (rowCode(row) && !codeMatches(rowCode(row))) return 'Corrige el UPC/EAN o deja el campo vacío.';
+  if (row.review || row.costUnconfirmed) return 'Confirma el costo y las unidades vendibles.';
+  if (invoice.unitCost(row.costo, row.cantidad) === null) return 'Revisa el importe y escribe una cantidad entera de unidades.';
+  const sale = (row.catalogSale ?? '').trim();
+  if (sale && (invoice.moneyCents(sale) === null || invoice.moneyCents(sale) < 0)) return 'Revisa el precio de venta.';
+  return verified ? '' : 'Cuadra los importes de la factura para guardar.';
+}
 
 function catalogInput(row, costsVerified) {
   const cost = rowCost(row, costsVerified);
@@ -163,10 +185,6 @@ async function loadCatalogMatches() {
     const products = await catalog.list();
     if (request !== invoiceReadRequest) return;
     catalogProducts = new Map(products.filter(product => product.code).map(product => [product.code, product]));
-    for (const product of products.filter(product => product.code)) {
-      const key = catalog.barcodeKey(product.code);
-      if (!catalogProducts.has(key)) catalogProducts.set(key, product);
-    }
   } catch {
     if (request !== invoiceReadRequest) return;
     catalogProducts = new Map();
@@ -177,7 +195,7 @@ async function loadCatalogMatches() {
 function showCatalogComparison(product, row, verified) {
   const element = product.querySelector('.catalog-comparison');
   const code = rowCode(row);
-  const known = codeMatches(code) && (catalogProducts.get(code) ?? catalogProducts.get(catalog.barcodeKey(code)));
+  const known = codeMatches(code) && catalog.matchByCode(code, catalogProducts);
   const saleField = product.querySelector('.catalog-sale');
   saleField.placeholder = known?.sale != null ? (known.sale / 100).toFixed(2) + ' guardado' : 'Dejar pendiente';
   if (!known) {
@@ -185,8 +203,10 @@ function showCatalogComparison(product, row, verified) {
     return;
   }
   const history = catalog.purchaseHistory(known);
-  const recorded = history.some(purchase => purchase.id === recordId(row));
-  const earlier = recorded ? history.find(purchase => purchase.id !== recordId(row))?.cost : known.cost;
+  const recordedIndex = history.findIndex(purchase => purchase.id === recordId(row));
+  const recorded = recordedIndex >= 0;
+  const earlier = recorded ? history[recordedIndex + 1]?.cost : Number.isFinite(invoiceSource.date)
+    ? history.find(purchase => purchase.date == null || purchase.date <= invoiceSource.date)?.cost : known.cost;
   const cost = rowCost(row, verified);
   const sale = known.sale;
   const oldMargin = catalog.grossMargin(earlier, sale);
@@ -203,26 +223,28 @@ function showCatalogComparison(product, row, verified) {
   ].filter(Boolean).join(' · ');
 }
 
-function updateCatalogSelection() {
-  const selected = rows.filter(row => row.catalogSelected).length;
+function updateCatalogSelection(eligible = rows.filter(row => !rowProblem(row, !totals || invoice.reconcile(rows, totals).verified))) {
+  const selected = eligible.filter(row => row.catalogSelected).length;
   const all = $('selectCatalogRows');
   $('catalogBatch').hidden = rows.length < 2;
-  all.checked = rows.length > 0 && selected === rows.length;
-  all.indeterminate = selected > 0 && selected < rows.length;
-  all.disabled = displayedBatchBusy;
+  all.checked = eligible.length > 0 && selected === eligible.length;
+  all.indeterminate = selected > 0 && selected < eligible.length;
+  all.disabled = displayedBatchBusy || !eligible.length;
   $('saveCatalogRows').disabled = !selected || displayedBatchBusy;
   $('saveCatalogRows').textContent = selected ? 'Guardar seleccionados (' + selected + ')' : 'Guardar seleccionados';
 }
 
 $('selectCatalogRows').onchange = () => {
-  for (const row of rows) row.catalogSelected = $('selectCatalogRows').checked;
-  for (const input of $('items').querySelectorAll('.catalog-choice input')) input.checked = $('selectCatalogRows').checked;
+  const verified = !totals || invoice.reconcile(rows, totals).verified;
+  for (const row of rows) row.catalogSelected = !rowProblem(row, verified) && $('selectCatalogRows').checked;
+  recalc();
   $('catalogBatchStatus').textContent = '';
   updateCatalogSelection();
 };
 
 $('saveCatalogRows').onclick = async () => {
-  const selected = rows.filter(row => row.catalogSelected);
+  const verified = !totals || invoice.reconcile(rows, totals).verified;
+  const selected = rows.filter(row => row.catalogSelected && !rowProblem(row, verified));
   if (!selected.length || displayedBatchBusy) return;
   const status = $('catalogBatchStatus');
   status.textContent = '';
@@ -230,8 +252,7 @@ $('saveCatalogRows').onclick = async () => {
     status.textContent = 'La factura está en otra moneda. Añade los productos desde Mi catálogo con sus precios en dólares.';
     return;
   }
-  const costsVerified = !totals || invoice.reconcile(rows, totals).verified;
-  const inputs = selected.map(row => catalogInput(row, costsVerified));
+  const inputs = selected.map(row => catalogInput(row, verified));
   const currentRows = rows;
   displayedBatchBusy = true;
   updateCatalogSelection();
@@ -275,22 +296,25 @@ function catalogControls(row, index) {
   price.className = 'catalog-sale';
   price.placeholder = 'Dejar pendiente';
   price.value = row.catalogSale ?? '';
-  price.oninput = () => { row.catalogSale = price.value; };
+  price.oninput = () => { row.catalogSale = price.value; recalc(); };
   price.id = 'catalog-sale-' + index;
   label.htmlFor = price.id;
   field.append(label, price);
   const save = document.createElement('button');
   save.type = 'button';
+  save.className = 'save-purchase';
   save.textContent = 'Guardar compra';
   const status = document.createElement('p');
   status.className = 'status';
   status.setAttribute('role', 'status');
   save.onclick = async () => {
+    if (row.saving || rowProblem(row, !totals || invoice.reconcile(rows, totals).verified)) return;
     if (totals?.foreignCurrency) {
       status.textContent = 'Esta factura está en otra moneda. Añade el producto desde Mi catálogo con sus precios en dólares.';
       return;
     }
     const input = catalogInput(row, !totals || invoice.reconcile(rows, totals).verified);
+    row.saving = true;
     save.disabled = true;
     price.disabled = true;
     try {
@@ -307,12 +331,15 @@ function catalogControls(row, index) {
     } catch (error) {
       status.textContent = error.message || 'No se pudo guardar el producto.';
     } finally {
-      save.disabled = false;
+      row.saving = false;
       price.disabled = false;
+      recalc();
     }
   };
   actions.append(field, save);
-  section.append(actions, status);
+  const hint = document.createElement('p');
+  hint.className = 'caption save-hint';
+  section.append(actions, hint, status);
   if (rows.length > 1) {
     const choice = document.createElement('label');
     choice.className = 'catalog-choice';
@@ -400,7 +427,7 @@ function draw() {
       info.textContent = row.info;
       product.append(info);
     }
-    if (row.review) {
+    if (row.review || row.costUnconfirmed) {
       const note = document.createElement('p');
       note.className = 'caption invoice-warning';
       note.textContent = row.warning || 'Confirma el costo y las unidades.';
@@ -408,7 +435,7 @@ function draw() {
       confirm.type = 'button';
       confirm.textContent = 'Confirmar costo y unidades';
       confirm.onclick = () => {
-        if (invoice.moneyCents(row.costo) === null || !Number.isSafeInteger(Number(row.cantidad)) || Number(row.cantidad) < 1) {
+        if (invoice.unitCost(row.costo, row.cantidad) === null || !Number.isSafeInteger(Number(row.cantidad)) || Number(row.cantidad) < 1) {
           note.textContent = 'Escribe un importe y un número entero de unidades.';
           return;
         }
@@ -441,10 +468,21 @@ function draw() {
 
 function recalc() {
   const check = totals ? invoice.reconcile(rows, totals) : null;
+  const eligible = [];
+  const verified = !check || check.verified;
   [...$('items').children].forEach((product, index) => {
     const row = rows[index];
-    showCatalogComparison(product, row, !check || check.verified);
-    const pending = row.review || (check && !check.verified);
+    showCatalogComparison(product, row, verified);
+    const problem = rowProblem(row, verified);
+    if (!problem) eligible.push(row);
+    product.querySelector('.save-hint').textContent = problem;
+    product.querySelector('.save-purchase').disabled = Boolean(problem || row.saving);
+    const checkbox = product.querySelector('.catalog-choice input');
+    if (checkbox) {
+      checkbox.disabled = Boolean(problem || displayedBatchBusy);
+      checkbox.checked = !problem && Boolean(row.catalogSelected);
+    }
+    const pending = row.review || row.costUnconfirmed || !verified;
     const cost = invoice.unitCost(row.costo, row.cantidad);
     product.querySelector('.invoice-unit-cost').textContent = 'Costo por unidad: ' + money(cost ?? NaN) +
       (cost !== null && (pending || row.costUnconfirmed) ? ' · provisional' : '');
@@ -456,7 +494,8 @@ function recalc() {
     const markupPrice = pending ? null : invoice.priceWithMarkup(row.costo, row.cantidad);
     product.querySelector('[data-markup]').textContent = markupPrice === null ? '—' : money(markupPrice);
   });
-  updateInvoiceSummary(check);
+  updateCatalogSelection(eligible);
+  updateInvoiceSummary(check, eligible.length);
 }
 
 const invoice = window.PorcentoFactura;
@@ -471,6 +510,7 @@ function displayInvoice(result, notes = []) {
     catalogSelected: rowCost(row, verified) !== null }));
   nextSourceLine = rows.length;
   documentNotes = Array.isArray(notes) ? notes.filter(note => typeof note === 'string').slice(0, 5) : [];
+  $('printedAdjustments').value = '';
   $('printedTotal').value = totals.total === null ? '' : (totals.total / 100).toFixed(2);
   $('totalInputStatus').textContent = '';
   draw();
@@ -479,15 +519,18 @@ function displayInvoice(result, notes = []) {
     : 'No pude identificar productos. Toma una foto más cerca de la tabla o añade los renglones manualmente.';
 }
 
-function updateInvoiceSummary(check) {
+function updateInvoiceSummary(check, ready = 0) {
   const summary = $('invoiceSummary');
   const formatted = cents => money(cents / 100);
-  const reviewCount = rows.filter(row => row.review || !Number(row.costo) || !Number(row.cantidad)).length;
+  const reviewCount = rows.filter(row => rowProblem(row, true)).length;
   const differenceText = difference => difference > 0 ? 'Faltan ' + formatted(difference) : 'Sobran ' + formatted(-difference);
-  summary.dataset.state = check && !check.verified ? 'review' : '';
+  summary.dataset.state = (check && !check.verified) || reviewCount ? 'review' : '';
+  $('adjustmentEntry').hidden = !totals?.adjustments.includes(null);
   $('printedTotalEntry').hidden = !check || check.verified;
   summary.textContent = check ? [
-    check.verified ? 'Total cuadrado.' : 'Factura pendiente de revisión.',
+    check.verified ? 'Importes conciliados.' : 'Importes pendientes de conciliar.',
+    ready ? ready + (ready === 1 ? ' compra lista para guardar.' : ' compras listas para guardar.') : '',
+    !ready && rows.length ? 'Aún no hay compras listas para guardar.' : '',
     rows.some(row => invoice.moneyCents(row.costo) !== null) ? 'Importes registrados: ' + formatted(check.sum) + '.' : 'Aún no hay importes de productos.',
     totals.subtotal === null ? '' : 'Subtotal impreso: ' + formatted(totals.subtotal) + '.',
     check.computed === check.sum ? '' : 'Con ajustes: ' + formatted(check.computed) + '.',
@@ -501,7 +544,7 @@ function updateInvoiceSummary(check) {
     totals.partial ? 'La imagen o el documento está incompleto.' : '',
     reviewCount ? reviewCount + (reviewCount === 1 ? ' renglón por revisar.' : ' renglones por revisar.') : '',
     ...documentNotes
-  ].filter(Boolean).join(' ') : '';
+  ].filter(Boolean).join(' ') : rows.length ? ready + ' de ' + rows.length + ' compras listas para guardar.' : '';
   $('export').disabled = !rows.length || Boolean(check && !check.verified);
 }
 
@@ -511,6 +554,15 @@ $('printedTotalEntry').onsubmit = event => {
   if (!totals || entered === null) {
     $('totalInputStatus').textContent = 'Escribe el total tal como aparece en la factura.';
     return;
+  }
+  if (totals.adjustments.includes(null)) {
+    const adjustments = invoice.moneyCents($('printedAdjustments').value);
+    if (adjustments === null) {
+      $('totalInputStatus').textContent = 'Escribe el total de cargos y descuentos impresos.';
+      return;
+    }
+    totals.adjustments = [adjustments];
+    totals.manualAdjustments = true;
   }
   totals.total = entered;
   totals.manualTotal = true;
@@ -690,6 +742,7 @@ for (const id of ['cameraFile', 'file']) {
     if (!file) return;
     selectedFile = file;
     invoiceSource = {};
+    analyzedText = '';
     manualInvoiceId = crypto.randomUUID();
     nextSourceLine = 0;
     setTotalPhoto(null);
@@ -917,13 +970,26 @@ function combinePdfPages(pages) {
   const readings = pages.map(page => page.reading);
   const products = readings.flatMap(reading => reading.rows);
   const final = readings.at(-1).totals;
+  const pageChecks = readings.map(reading => invoice.reconcile(reading.rows, reading.totals));
+  const sum = pageChecks.reduce((total, result) => total + result.sum, 0);
+  const pageSubtotals = readings.filter(reading => reading.totals.subtotal !== null);
+  const perPage = pageSubtotals.length > 0 && pageChecks.every(result => !result.subtotalDifference);
+  const subtotal = final.subtotal === sum ? final.subtotal :
+    perPage ? (pageSubtotals.length === readings.length ? sum : null) : final.subtotal;
   const firstTotal = readings.find(reading => reading.totals.total !== null)?.totals.total ?? null;
+  const total = final.total ?? firstTotal;
+  const allAdjustments = readings.flatMap(reading => reading.totals.adjustments);
+  const finalAdjustmentsMatch = total !== null &&
+    sum + final.adjustments.reduce((value, adjustment) => value + adjustment, 0) === total;
+  const adjustments = finalAdjustmentsMatch && !allAdjustments.includes(null) ? final.adjustments : allAdjustments;
   const printedTotals = new Set(readings.map(reading => reading.totals.total).filter(total => total !== null));
   return {
     rows: products,
     totals: {
       ...final,
-      total: final.total ?? firstTotal,
+      subtotal,
+      adjustments,
+      total,
       partial: readings.some(reading => reading.totals.partial || (!reading.rows.length && reading.totals.total === null)),
       foreignCurrency: readings.some(reading => reading.totals.foreignCurrency),
       conflictingTotal: printedTotals.size > 1 || readings.some(reading => reading.totals.conflictingTotal)
@@ -958,10 +1024,10 @@ $('read').onclick = () => withInvoice(async file => {
     }
     const result = pages.length === 1 ? pages[0].reading : combinePdfPages(pages);
     const source = pages[0].source;
-    const hash = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
-    const fingerprint = Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, '0')).join('');
-    invoiceSource = { ...source, id: source?.number ? source.supplier + ':' + source.number : fingerprint };
+    const id = invoiceNumberId(source) || await fingerprint(await file.arrayBuffer());
+    invoiceSource = { ...source, id };
     $('raw').value = pages.map(page => page.text).join('\n');
+    analyzedText = normalizedText($('raw').value);
     displayInvoice(result, pages.flatMap(page => page.notes));
     if (!readingIsVerified(result)) $('basicOptions').open = true;
   } finally {
@@ -972,9 +1038,23 @@ $('read').onclick = () => withInvoice(async file => {
     }
   }
 });
-$('parse').onclick = () => {
-  const result = invoice.parseText($('raw').value, { format: $('invoiceFormat').value || undefined });
-  if (totals) {
+$('parse').onclick = async () => {
+  const text = normalizedText($('raw').value);
+  if (!text) {
+    $('status').textContent = 'Pega el texto de una factura para analizarlo.';
+    return;
+  }
+  const format = $('invoiceFormat').value || undefined;
+  const result = invoice.parseText(text, { format });
+  const source = documentSource(text, format);
+  const previous = invoiceSource;
+  const numberId = invoiceNumberId(source);
+  const sameInvoice = numberId ? previous.id === numberId : text === analyzedText;
+  const id = numberId || (sameInvoice && previous.id) ||
+    'texto:' + await fingerprint(new TextEncoder().encode(text));
+  if (text !== normalizedText($('raw').value) || previous !== invoiceSource) return;
+
+  if (sameInvoice && totals) {
     result.totals.partial ||= totals.partial;
     result.totals.foreignCurrency ||= totals.foreignCurrency;
     result.totals.conflictingTotal ||= totals.conflictingTotal;
@@ -983,12 +1063,13 @@ $('parse').onclick = () => {
       result.totals.manualTotal = totals.manualTotal;
     }
     result.totals.subtotal ??= totals.subtotal;
-    if (!result.totals.adjustments.length) result.totals.adjustments = totals.adjustments;
+    if (totals.manualAdjustments || !result.totals.adjustments.length) {
+      result.totals.adjustments = totals.adjustments;
+      result.totals.manualAdjustments = totals.manualAdjustments;
+    }
   }
-  if (!invoiceSource.id) {
-    const source = documentSource($('raw').value, $('invoiceFormat').value);
-    invoiceSource = { ...source, id: source.number ? source.supplier + ':' + source.number : manualInvoiceId };
-  }
+  invoiceSource = { ...source, date: source.date ?? (sameInvoice ? previous.date : null), id };
+  analyzedText = text;
   displayInvoice(result);
 };
 $('add').onclick = () => {

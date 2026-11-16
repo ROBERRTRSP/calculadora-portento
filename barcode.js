@@ -49,12 +49,17 @@
     const photo = dialog.querySelector('input');
     let reader;
     let phase = 'camera';
+    let photoReady;
+    let nativeStream;
 
     async function resetReader() {
+      nativeStream?.getTracks().forEach(track => track.stop());
+      nativeStream = null;
       if (!reader) return;
-      if (reader.isScanning) await reader.stop();
-      reader.clear();
+      const current = reader;
       reader = null;
+      if (current.isScanning) await current.stop();
+      current.clear();
     }
 
     function accept(raw) {
@@ -67,6 +72,34 @@
       return true;
     }
 
+    async function nativeCamera() {
+      const formats = ['ean_13', 'ean_8', 'upc_a', 'upc_e'];
+      const supported = await window.BarcodeDetector.getSupportedFormats();
+      const detector = new window.BarcodeDetector({ formats: formats.filter(format => supported.includes(format)) });
+      if (!dialog.open || phase !== 'camera') return;
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
+      nativeStream = stream;
+      if (!dialog.open || phase !== 'camera') { await resetReader(); return; }
+      const video = document.createElement('video');
+      video.playsInline = true;
+      video.muted = true;
+      video.style.width = '100%';
+      preview.replaceChildren(video);
+      preview.hidden = false;
+      video.srcObject = stream;
+      await video.play();
+      status.textContent = 'Enfoca el código completo y muévelo despacio.';
+      async function detect() {
+        if (!dialog.open || phase !== 'camera' || nativeStream !== stream) return;
+        try {
+          const codes = await detector.detect(video);
+          if (phase === 'camera' && codes.some(code => accept(code.rawValue))) return;
+        } catch { /* The current frame may be unavailable. */ }
+        requestAnimationFrame(detect);
+      }
+      void detect();
+    }
+
     async function camera() {
       if (!navigator.mediaDevices?.getUserMedia) {
         status.textContent = 'Puedes tomar una foto del código con «Leer desde foto».';
@@ -77,13 +110,19 @@
         if (!dialog.open || phase !== 'camera') return;
         preview.hidden = false;
         reader = createReader(preview.id);
-        const width = Math.min(300, Math.floor(preview.clientWidth * .85));
         await reader.start({ facingMode: 'environment' }, {
-          fps: 12, qrbox: { width, height: Math.round(width * .42) }, disableFlip: true
+          fps: 12, qrbox: (viewWidth, viewHeight) => {
+            const width = Math.min(300, Math.floor(viewWidth * .85));
+            return { width, height: Math.min(Math.round(width * .42), Math.floor(viewHeight * .8)) };
+          }, disableFlip: true
         }, raw => { if (phase === 'camera') accept(raw); }, () => {});
         if (dialog.open && phase === 'camera') status.textContent = 'Coloca el código dentro del recuadro.';
       } catch {
         if (dialog.open && phase === 'camera') {
+          if (window.BarcodeDetector) {
+            try { await resetReader(); await nativeCamera(); return; }
+            catch { await resetReader(); }
+          }
           preview.hidden = true;
           status.textContent = 'No se pudo abrir la cámara. Revisa el permiso o usa «Leer desde foto».';
         }
@@ -92,7 +131,7 @@
 
     dialog.querySelector('[data-close]').onclick = () => dialog.close();
     photoButton.onclick = () => photo.click();
-    photo.onchange = async () => {
+    async function readPhoto() {
       const file = photo.files?.[0];
       if (!file || !dialog.open) return;
       phase = 'photo';
@@ -113,7 +152,8 @@
       } finally {
         photoButton.disabled = false;
       }
-    };
+    }
+    photo.onchange = () => { photoReady = readPhoto(); };
     document.body.append(dialog);
     dialog.showModal();
     const cameraReady = camera();
@@ -122,8 +162,10 @@
     dialog.addEventListener('close', async () => {
       window.removeEventListener('pagehide', leavePage);
       dialog.hidden = true;
+      nativeStream?.getTracks().forEach(track => track.stop());
       try {
         await cameraReady;
+        await photoReady;
         await resetReader();
       } catch { /* The reader may already be closed. */ }
       finally { dialog.remove(); }
@@ -142,5 +184,5 @@
     field.append(input, button);
   }
 
-  window.PorcentoBarcode = { addButton, load, createReader };
+  window.PorcentoBarcode = { addButton, scanInto, load, createReader };
 })();

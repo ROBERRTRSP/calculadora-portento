@@ -14,7 +14,7 @@ En un proyecto existente conectado a Git, publica la rama actualizada según su 
 2. Los UPC de productos guardados muestran el costo anterior y el nuevo por unidad, y el margen al precio de venta guardado. Revisa los renglones pendientes antes de registrar sus compras.
 3. Pulsa **Guardar compra** o usa **Guardar seleccionados** para registrar varios renglones. Los productos guardados conservan su foto, nombre y precio de venta si dejas este último vacío.
 4. En **Escanear producto**, escribe o escanea el UPC para abrir la ficha de Mi catálogo. Puedes registrar otra compra introduciendo el costo nuevo y las unidades.
-5. En **Mi catálogo**, abre la ficha para completar la foto, editar los datos o consultar el historial de compras y su margen. Los datos se guardan en IndexedDB en el navegador del dispositivo.
+5. En **Mi catálogo**, abre la ficha para completar la foto, editar los datos o consultar el historial de compras y su margen. Los datos se guardan en IndexedDB en el navegador del dispositivo. Usa **Respaldo del catálogo** para descargar las fichas, fotos e historial. Al importar, las fichas que ya existen se conservan.
 
 ## Cálculos
 
