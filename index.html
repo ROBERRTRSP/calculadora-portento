@@ -97,7 +97,7 @@
     <nav class="tools" aria-label="Herramientas">
       <a class="button" href="./comparador.html">
         <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7V4h4m10 0h4v3M3 17v3h4m10 0h4v-3M7 8v8m3-8v8m4-8v8m3-8v8"/></svg>
-        Comparar precios
+        Escanear producto
       </a>
       <a class="button" href="./scanner.html">
         <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2V3Zm3 5h6m-6 4h6"/></svg>
@@ -161,7 +161,7 @@
       const units = quantity.value === '' ? 1 : quantity.valueAsNumber;
       const unitCost = cost.valueAsNumber / units;
       if (!Number.isFinite(unitCost) || unitCost < 0 || !Number.isInteger(units) || units < 1) return;
-      const draft = new URLSearchParams({ costo: String(unitCost), venta: sale.value });
+      const draft = new URLSearchParams({ compra: cost.value, unidades: String(units), venta: sale.value });
       location.href = './catalogo.html#' + draft;
     };
     for (const [current, next] of [[cost, quantity], [quantity, sale], [sale, null]]) {

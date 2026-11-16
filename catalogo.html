@@ -58,13 +58,18 @@
         </fieldset>
         <div class="fields field">
           <div class="field">
-            <label for="productCost">Costo por unidad ($)</label>
-            <input id="productCost" inputmode="decimal" placeholder="Opcional" autocomplete="off">
+            <label for="productCost">Precio total de compra ($)</label>
+            <input id="productCost" inputmode="decimal" placeholder="0.00" autocomplete="off" required>
           </div>
           <div class="field">
-            <label for="productSale">Precio de venta ($)</label>
-            <input id="productSale" inputmode="decimal" placeholder="Opcional" autocomplete="off">
+            <label for="productUnits">Unidades compradas</label>
+            <input id="productUnits" type="number" min="1" step="1" inputmode="numeric" placeholder="Ej. 25" required>
           </div>
+        </div>
+        <p id="productUnitCost" class="status" aria-live="polite"></p>
+        <div class="field">
+          <label for="productSale">Precio de venta por unidad ($)</label>
+          <input id="productSale" inputmode="decimal" placeholder="0.00" autocomplete="off" required>
         </div>
         <div class="actions">
           <button id="saveProduct" class="primary" type="submit">Guardar producto</button>
@@ -87,6 +92,7 @@
   <script>
     const $ = id => document.getElementById(id);
     const catalog = window.PorcentoCatalogo;
+    const invoice = window.PorcentoFactura;
     window.PorcentoBarcode.addButton($('productCode'));
     const editor = $('catalogEditor');
     const number = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
@@ -194,20 +200,40 @@
         prices.className = 'caption';
         prices.textContent = 'Costo por unidad: ' + (product.cost === null ? '—' : number.format(product.cost)) +
           ' · Venta: ' + (product.sale === null ? '—' : number.format(product.sale / 100));
-        if (product.purchase) {
-          prices.textContent += ' · Compra: ' + number.format(product.purchase.cents / 100) +
-            (product.purchase.units === null ? '' : ' por ' + product.purchase.units + (product.purchase.units === 1 ? ' unidad' : ' unidades'));
-        }
+        const purchase = document.createElement('p');
+        purchase.className = 'caption';
+        purchase.textContent = 'Compra: ' + (product.purchase ? number.format(product.purchase.cents / 100) : '—') +
+          ' · Unidades: ' + (product.purchase?.units ?? '—');
+        const pending = [!product.photo && 'foto', !product.purchase && 'precio de compra', product.purchase?.units == null && 'unidades', product.sale == null && 'precio de venta'].filter(Boolean);
+        const note = document.createElement('p');
+        note.className = 'status';
+        note.textContent = pending.length ? 'Pendiente: ' + pending.join(', ') + '.' : '';
         const button = document.createElement('button');
         button.type = 'button';
-        button.textContent = product.photo ? 'Editar' : 'Añadir foto';
-        button.setAttribute('aria-label', product.photo ? 'Editar ' + product.name : 'Añadir foto a ' + product.name);
+        button.textContent = pending.length ? 'Completar' : 'Editar';
+        button.setAttribute('aria-label', button.textContent + ' ' + product.name);
         button.onclick = () => openEditor(product);
-        info.append(name, code, prices);
+        info.append(name, code, purchase, prices, note);
         item.append(thumbnail, info);
         row.append(item, button);
         return row;
       }));
+    }
+
+    function purchaseValues() {
+      const cents = invoice.moneyCents($('productCost').value);
+      const units = Number($('productUnits').value);
+      return {
+        cents: cents !== null && cents >= 0 ? cents : null,
+        units: Number.isSafeInteger(units) && units > 0 ? units : null
+      };
+    }
+
+    function showUnitCost() {
+      const { cents, units } = purchaseValues();
+      const cost = cents !== null && units !== null ? cents / 100 / units : null;
+      $('productUnitCost').textContent = cost !== null ? 'Costo por unidad: ' + number.format(cost) :
+        editing?.cost != null ? 'Costo por unidad guardado: ' + number.format(editing.cost) : '';
     }
 
     async function loadProducts() {
@@ -230,8 +256,10 @@
       $('editorTitle').textContent = product ? 'Editar producto' : 'Añadir producto';
       $('productName').value = product?.name ?? '';
       $('productCode').value = product?.code ?? '';
-      $('productCost').value = product?.cost == null ? '' : String(product.cost);
+      $('productCost').value = product?.purchase ? (product.purchase.cents / 100).toFixed(2) : '';
+      $('productUnits').value = product?.purchase?.units ?? '';
       $('productSale').value = product?.sale == null ? '' : (product.sale / 100).toFixed(2);
+      showUnitCost();
       $('editorStatus').textContent = '';
       $('deleteProduct').hidden = !product;
       editor.hidden = false;
@@ -256,6 +284,8 @@
     $('newProduct').onclick = () => openEditor();
     $('cancelProduct').onclick = closeEditor;
     $('catalogSearch').oninput = showProducts;
+    $('productCost').oninput = showUnitCost;
+    $('productUnits').oninput = showUnitCost;
     editor.onsubmit = async event => {
       event.preventDefault();
       if (saving || $('saveProduct').disabled) return;
@@ -264,13 +294,15 @@
         $('takeProductPhoto').focus();
         return;
       }
-      const costText = $('productCost').value.trim();
-      const cost = costText ? Number(costText.replace(',', '.')) : null;
-      if (costText && (!/^\d+(?:[.,]\d+)?$/.test(costText) || !Number.isFinite(cost))) {
-        $('editorStatus').textContent = 'Escribe un costo válido por unidad.';
+      const { cents, units } = purchaseValues();
+      const sale = $('productSale').value.trim();
+      const saleCents = invoice.moneyCents(sale);
+      if (cents === null || units === null || saleCents === null || saleCents < 0) {
+        $('editorStatus').textContent = cents === null ? 'Escribe el precio total de compra, con hasta dos decimales.' :
+          units === null ? 'Escribe una cantidad entera mayor que cero.' : 'Escribe el precio de venta por unidad, con hasta dos decimales.';
         return;
       }
-      const input = { name: $('productName').value, code: $('productCode').value, cost, sale: $('productSale').value, photo: productPhoto };
+      const input = { name: $('productName').value, code: $('productCode').value, cost: cents / 100 / units, sale, purchase: { cents, units }, photo: productPhoto };
       lockEditor(true);
       try {
         const result = await catalog.save(input, { previousKey: editing?.key, expected: editing?.updated });
@@ -309,11 +341,13 @@
 
     window.addEventListener('pageshow', loadProducts);
     const draft = new URLSearchParams(location.hash.slice(1));
-    if (draft.has('costo')) {
+    if (draft.has('compra') || draft.has('costo')) {
       history.replaceState(null, '', location.pathname + location.search);
       openEditor();
-      $('productCost').value = draft.get('costo');
+      $('productCost').value = draft.get('compra') ?? '';
+      $('productUnits').value = draft.get('unidades') ?? '';
       $('productSale').value = draft.get('venta') ?? '';
+      showUnitCost();
     }
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
   </script>

@@ -127,7 +127,8 @@ function catalogInput(row, costsVerified) {
   const cost = costsVerified && !row.review && !row.costUnconfirmed ? invoice.unitCost(row.costo, row.cantidad) : null;
   return {
     name: row.nombre ?? '', code: row.codigoTipo === 'interno' ? '' : row.codigo ?? '',
-    cost, sale: row.catalogSale ?? ''
+    cost, sale: row.catalogSale ?? '',
+    purchase: cost === null ? null : { cents: invoice.moneyCents(row.costo), units: Number(row.cantidad) }
   };
 }
 
