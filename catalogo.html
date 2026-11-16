@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#f2f2f7">
+  <link rel="stylesheet" href="./porcento.css">
+  <title>Mi catálogo · Porcento</title>
+  <style>
+    #catalogEditor { margin-top: 10px; }
+    #catalogEditor .actions { margin-top: 10px; }
+    #catalogList { list-style: none; margin: 12px 0 0; padding: 0; }
+    #catalogList .row { align-items: start; }
+    #catalogList .row > div { min-width: 0; }
+    #catalogList h3 { overflow-wrap: anywhere; margin-bottom: 3px; }
+    #catalogList .row button { flex: none; }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <a class="back" href="./index.html">‹ Porcento</a>
+    <header class="page-header"><h1>Mi catálogo</h1></header>
+    <section class="card" aria-label="Gestionar productos">
+      <p class="caption">Los productos se guardan en este navegador.</p>
+      <p id="catalogStatus" class="status" role="status"></p>
+      <div class="actions field">
+        <button id="newProduct" class="primary" type="button">Añadir producto</button>
+        <a class="button" href="./scanner.html">Leer factura</a>
+      </div>
+      <form id="catalogEditor" hidden aria-labelledby="editorTitle">
+        <h2 id="editorTitle">Añadir producto</h2>
+        <div class="field">
+          <label for="productName">Producto</label>
+          <input id="productName" required maxlength="180" autocomplete="off">
+        </div>
+        <div class="field">
+          <label for="productCode">UPC / EAN <small>(opcional)</small></label>
+          <input id="productCode" inputmode="numeric" autocomplete="off">
+        </div>
+        <div class="fields field">
+          <div class="field">
+            <label for="productCost">Costo por unidad ($)</label>
+            <input id="productCost" inputmode="decimal" placeholder="Opcional" autocomplete="off">
+          </div>
+          <div class="field">
+            <label for="productSale">Precio de venta ($)</label>
+            <input id="productSale" inputmode="decimal" placeholder="Opcional" autocomplete="off">
+          </div>
+        </div>
+        <div class="actions">
+          <button id="saveProduct" class="primary" type="submit">Guardar producto</button>
+          <button id="cancelProduct" type="button">Cancelar</button>
+          <button id="deleteProduct" type="button" class="quiet negative" hidden>Eliminar</button>
+        </div>
+        <p id="editorStatus" class="status" role="status"></p>
+      </form>
+    </section>
+    <section class="card" aria-label="Productos guardados">
+      <label for="catalogSearch">Buscar productos guardados</label>
+      <input id="catalogSearch" type="search" placeholder="Nombre o código">
+      <ul id="catalogList"></ul>
+      <p id="catalogEmpty" class="status" role="status"></p>
+    </section>
+  </main>
+  <script src="./factura.js?v=20"></script>
+  <script src="./catalogo.js?v=20"></script>
+  <script>
+    const $ = id => document.getElementById(id);
+    const catalog = window.PorcentoCatalogo;
+    const editor = $('catalogEditor');
+    const number = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
+    let products = [];
+    let editing = null;
+    let saving = false;
+
+    function showProducts() {
+      const query = catalog.searchKey($('catalogSearch').value);
+      const matches = products.filter(product => catalog.searchKey(product.name).includes(query) || product.code.includes(query));
+      $('catalogEmpty').textContent = matches.length ? '' : query ? 'No se encontraron productos.' : 'Todavía no hay productos guardados.';
+      $('catalogList').replaceChildren(...matches.map(product => {
+        const row = document.createElement('li');
+        row.className = 'row';
+        const info = document.createElement('div');
+        const name = document.createElement('h3');
+        name.textContent = product.name;
+        const code = document.createElement('p');
+        code.className = 'caption';
+        code.textContent = product.code;
+        code.hidden = !product.code;
+        const prices = document.createElement('p');
+        prices.className = 'caption';
+        prices.textContent = 'Costo por unidad: ' + (product.cost === null ? '—' : number.format(product.cost)) +
+          ' · Venta: ' + (product.sale === null ? '—' : number.format(product.sale / 100));
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = 'Editar';
+        button.setAttribute('aria-label', 'Editar ' + product.name);
+        button.onclick = () => openEditor(product);
+        info.append(name, code, prices);
+        row.append(info, button);
+        return row;
+      }));
+    }
+
+    async function loadProducts() {
+      try {
+        products = await catalog.list();
+        showProducts();
+      } catch {
+        $('catalogStatus').textContent = 'El catálogo no está disponible en este navegador.';
+      }
+    }
+
+    function openEditor(product = null) {
+      if (saving) return;
+      editing = product;
+      $('editorTitle').textContent = product ? 'Editar producto' : 'Añadir producto';
+      $('productName').value = product?.name ?? '';
+      $('productCode').value = product?.code ?? '';
+      $('productCost').value = product?.cost == null ? '' : String(product.cost);
+      $('productSale').value = product?.sale == null ? '' : (product.sale / 100).toFixed(2);
+      $('editorStatus').textContent = '';
+      $('deleteProduct').hidden = !product;
+      editor.hidden = false;
+      $('productName').focus();
+    }
+
+    function closeEditor() {
+      editing = null;
+      editor.hidden = true;
+      $('newProduct').focus();
+    }
+
+    function lockEditor(locked) {
+      saving = locked;
+      for (const control of editor.elements) control.disabled = locked;
+      $('newProduct').disabled = locked;
+    }
+
+    $('newProduct').onclick = () => openEditor();
+    $('cancelProduct').onclick = closeEditor;
+    $('catalogSearch').oninput = showProducts;
+    editor.onsubmit = async event => {
+      event.preventDefault();
+      const costText = $('productCost').value.trim();
+      const cost = costText ? Number(costText.replace(',', '.')) : null;
+      if (costText && (!/^\d+(?:[.,]\d+)?$/.test(costText) || !Number.isFinite(cost))) {
+        $('editorStatus').textContent = 'Escribe un costo válido por unidad.';
+        return;
+      }
+      const input = { name: $('productName').value, code: $('productCode').value, cost, sale: $('productSale').value };
+      lockEditor(true);
+      try {
+        const result = await catalog.save(input, { previousKey: editing?.key, expected: editing?.updated });
+        if (result.conflict || result.stale) {
+          $('editorStatus').textContent = result.conflict ? 'Ya existe un producto con ese código o nombre. Abre el producto guardado para editarlo.' :
+            'El producto cambió. Vuelve a abrirlo desde la lista.';
+          await loadProducts();
+          return;
+        }
+        $('catalogStatus').textContent = 'Producto guardado.';
+        await loadProducts();
+      } catch (error) {
+        $('editorStatus').textContent = error.message || 'No se pudo guardar el producto.';
+        return;
+      } finally {
+        lockEditor(false);
+      }
+      closeEditor();
+    };
+
+    $('deleteProduct').onclick = async () => {
+      if (!editing || !confirm('¿Eliminar «' + editing.name + '» del catálogo?')) return;
+      lockEditor(true);
+      try {
+        const deleted = await catalog.remove(editing);
+        $('catalogStatus').textContent = deleted ? 'Producto eliminado.' : 'El producto cambió. Revisa la lista.';
+        await loadProducts();
+      } catch {
+        $('editorStatus').textContent = 'No se pudo eliminar el producto.';
+        return;
+      } finally {
+        lockEditor(false);
+      }
+      closeEditor();
+    };
+
+    window.addEventListener('pageshow', loadProducts);
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
+  </script>
+</body>
+</html>

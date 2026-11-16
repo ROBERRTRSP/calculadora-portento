@@ -8,10 +8,6 @@
     const number = Number(value.replace(',', '.'));
     return Number.isFinite(number) ? number : null;
   };
-  const positive = value => {
-    const n = amount(value);
-    return n > 0 ? n : null;
-  };
   const count = value => {
     const n = amount(value);
     return Number.isSafeInteger(n) && n > 0 ? n : null;
@@ -147,7 +143,7 @@
       nombre: name, codigo: upc, cantidad_comprada: printedCases, unidades_por_empaque: pack,
       total_linea: total, importe_dudoso: expected !== null && costo !== expected,
       observacion: [printedCases ? '' : 'Confirma la cantidad de cajas impresa.',
-        validUpc ? '' : 'Confirma el UPC impreso antes de cruzarlo con NRS.'].filter(Boolean).join(' '),
+        validUpc ? '' : 'Confirma el UPC impreso.'].filter(Boolean).join(' '),
       codigo_tipo: validUpc ? '' : 'interno'
     };
   }
@@ -487,9 +483,15 @@
     return { text, reading };
   }
 
+  function unitCost(cost, quantity) {
+    const cents = moneyCents(cost);
+    const units = count(quantity);
+    return cents !== null && cents >= 0 && units !== null ? cents / 100 / units : null;
+  }
+
   function suggestedPrice(cost, quantity, margin) {
-    if (!positive(cost) || !count(quantity)) return null;
-    return Math.ceil((Number(cost) / Number(quantity) / (1 - margin / 100) - 1e-9) * 100) / 100;
+    const perUnit = unitCost(cost, quantity);
+    return perUnit > 0 ? Math.ceil((perUnit / (1 - margin / 100) - 1e-9) * 100) / 100 : null;
   }
 
   function priceWithMarkup(cost, quantity) {
@@ -500,7 +502,7 @@
     return Number.isFinite(unitPriceInCents) ? Math.max(0, Math.ceil(unitPriceInCents - 1e-9)) / 100 : null;
   }
 
-  const invoice = { normalize, parseText, suggestedPrice, priceWithMarkup, moneyCents, reconcile, preferReading, detectFormat, readColumns, tsvWords, chooseTableReading, readEmbeddedInvoice, readAzTable,
+  const invoice = { normalize, parseText, unitCost, suggestedPrice, priceWithMarkup, moneyCents, reconcile, preferReading, detectFormat, readColumns, tsvWords, chooseTableReading, readEmbeddedInvoice, readAzTable,
     isDairyInvoice: text => detectFormat(text) === 'dairy' };
   if (typeof module === 'object') module.exports = invoice;
   else window.PorcentoFactura = invoice;

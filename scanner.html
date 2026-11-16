@@ -36,12 +36,9 @@
     .invoice-markup .amount { color: var(--accent); }
     .invoice-warning { margin: 7px 0; color: var(--negative); }
     #raw { min-height: 100px; resize: vertical; }
-    .nrs-compare { margin: 8px 0; padding: 9px; background: var(--field); border-radius: 11px; }
-    .nrs-compare[data-below="true"] { background: #fce9e8; color: var(--negative); }
-    .nrs-compare p { font-size: 13px; line-height: 1.5; }
-    .nrs-compare strong { display: block; margin-bottom: 3px; }
-    #pricebookFile { margin-bottom: 9px; padding: 7px; font-size: 14px; }
-    #pricebook p { margin-top: 6px; }
+    .invoice-unit-cost { margin-top: 8px; }
+    .save-to-catalog { margin-top: 6px; }
+    .save-to-catalog button { margin-top: 6px; }
   </style>
 </head>
 <body>
@@ -82,19 +79,9 @@
       <p id="status" class="status" role="status"></p>
       <img id="preview" hidden alt="Vista previa de la factura">
     </section>
-    <details class="card" id="pricebook">
-      <summary>Comparar con My NRS Store</summary>
-      <div class="details-body">
-        <label for="pricebookFile">Pricebook de NRS (.xlsx, .xls o .csv)</label>
-        <input id="pricebookFile" type="file" accept=".xlsx,.xls,.csv">
-        <label for="targetMargin">Meta de margen bruto (%)</label>
-        <input id="targetMargin" type="number" inputmode="decimal" min="0" max="99.99" step=".01" required value="40">
-        <p id="pricebookStatus" class="status" role="status"></p>
-        <p class="caption">Los archivos se procesan en este dispositivo.</p>
-      </div>
-    </details>
     <section class="card" aria-labelledby="products-heading">
       <h2 id="products-heading">Productos</h2>
+      <a class="back" href="./catalogo.html">Mi catálogo</a>
       <p id="invoiceSummary" class="status" aria-live="polite"></p>
       <form id="printedTotalEntry" hidden>
         <label for="printedTotal">Total impreso en la factura ($)</label>
@@ -117,106 +104,63 @@
       </div>
     </details>
   </main>
-  <script src="./factura.js?v=19"></script>
-  <script src="./pricebook.js?v=18"></script>
+  <script src="./factura.js?v=20"></script>
+  <script src="./catalogo.js?v=20"></script>
   <script>
 const $ = id => document.getElementById(id);
 const money = n => Number.isFinite(n) ? '$' + n.toFixed(2) : '—';
 let rows = [];
-const pricebook = window.PorcentoPricebook;
-const targetInput = $('targetMargin');
-let catalog = null;
-let catalogImport = 0;
-try {
-  const saved = localStorage.getItem('porcento-meta-margen');
-  if (saved !== null && Number.isFinite(Number(saved)) && Number(saved) >= 0 && Number(saved) < 100) targetInput.value = saved;
-} catch { /* The target still works without storage. */ }
 
-function targetMargin() {
-  const target = targetInput.valueAsNumber;
-  return targetInput.validity.valid && Number.isFinite(target) ? target : null;
-}
-
-targetInput.addEventListener('input', () => {
-  const target = targetMargin();
-  targetInput.setAttribute('aria-invalid', String(target === null));
-  try {
-    if (target !== null) localStorage.setItem('porcento-meta-margen', String(target));
-  } catch { /* The target still works without storage. */ }
-  recalc();
-});
-
-$('pricebookFile').onchange = async event => {
-  const file = event.target.files[0];
-  const request = ++catalogImport;
-  if (!file) return;
-  catalog = null;
-  recalc();
-  $('pricebookStatus').textContent = 'Leyendo el Pricebook…';
-  try {
-    await loadScript('https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js');
-    const data = await file.arrayBuffer();
-    const XLSX = window.XLSX;
-    const workbook = XLSX.read(data, { raw: true, cellHTML: false, cellFormula: false });
-    let imported = null;
-    for (const name of workbook.SheetNames) {
-      const sheet = XLSX.utils.sheet_to_json(workbook.Sheets[name], { header: 1, defval: '', blankrows: false, raw: false });
-      const candidate = pricebook.readSheet(sheet);
-      if (candidate && (!imported || candidate.items.length > imported.items.length)) imported = candidate;
+function catalogControls(row) {
+  const section = document.createElement('details');
+  section.className = 'save-to-catalog';
+  const heading = document.createElement('summary');
+  heading.textContent = 'Guardar en mi catálogo';
+  const label = document.createElement('label');
+  label.textContent = 'Precio de venta por unidad ($, opcional)';
+  const price = document.createElement('input');
+  price.inputMode = 'decimal';
+  price.placeholder = 'Dejar pendiente';
+  label.append(price);
+  const save = document.createElement('button');
+  save.type = 'button';
+  save.textContent = 'Guardar producto';
+  const status = document.createElement('p');
+  status.className = 'status';
+  status.setAttribute('role', 'status');
+  save.onclick = async () => {
+    if (totals?.foreignCurrency) {
+      status.textContent = 'Esta factura está en otra moneda. Añade el producto desde Mi catálogo con sus precios en dólares.';
+      return;
     }
-    if (request !== catalogImport) return;
-    if (!imported?.items.length) throw Error('El archivo no tiene filas con nombre y precio válidos. Descarga de nuevo el Pricebook desde el portal de NRS.');
-    catalog = pricebook.indexPricebook(imported.items);
-    $('pricebookStatus').textContent = imported.items.length + ' productos del Pricebook cargados.' +
-      (imported.skipped ? ' Filas sin precio válido: ' + imported.skipped + '.' : '');
-  } catch (error) {
-    if (request !== catalogImport) return;
-    $('pricebookStatus').textContent = error.message || 'No pude abrir el Pricebook.';
-  }
-  recalc();
-};
-
-function updatePricebookCard(card, row, pendingInvoice) {
-  const target = targetMargin();
-  const value = pricebook.compare(row, catalog, target ?? NaN);
-  const cost = card.querySelector('[data-nrs-cost]');
-  const details = card.querySelector('[data-nrs-details]');
-  const title = card.querySelector('[data-nrs-title]');
-  const section = card.querySelector('[data-nrs-section]');
-  cost.textContent = value.cost === null ? 'Costo unitario nuevo: —'
-    : 'Costo unitario nuevo: ' + money(value.cost / 100) + (pendingInvoice || row.review || row.costUnconfirmed ? ' · provisional' : '');
-  title.textContent = '';
-  details.textContent = '';
-  section.dataset.below = 'false';
-  if (!catalog) return;
-  if (!value.match) {
-    title.textContent = 'Pendiente de confirmar';
-    details.textContent = 'Verifica el UPC o el nombre exacto en NRS.';
-    return;
-  }
-  const { item, via } = value.match;
-  const price = 'Venta en NRS: ' + money(value.sale / 100) + '/unidad' +
-    (item.quantity > 1 ? ' (' + item.quantity + ' por ' + money(item.cents / 100) + ')' : '') + '.';
-  const identity = via + ' · ' + [item.name, item.size].filter(Boolean).join(' ');
-  if (pendingInvoice || value.margin === null) {
-    title.textContent = 'Pendiente de confirmar';
-    details.textContent = identity + '. ' + price + ' ' + (item.needsReview
-      ? 'Revisa la venta por peso o los impuestos y cargos incluidos.'
-      : 'Revisa el costo, las unidades y el total de la factura.');
-    return;
-  }
-  if (target === null) {
-    title.textContent = 'Escribe una meta entre 0% y 99.99%';
-    details.textContent = identity + '. ' + price;
-    return;
-  }
-  section.dataset.below = String(value.below);
-  title.textContent = value.below ? 'Revisar precio' : 'Margen en meta';
-  const displayMargin = value.below && Number(value.margin.toFixed(2)) >= target
-    ? Math.floor(value.margin * 100) / 100 : value.margin;
-  details.textContent = identity + '. ' + price + ' Margen bruto: ' + displayMargin.toFixed(2) +
-    '%. Precio sugerido para ' + target + '%: ' + money(value.suggested / 100) + '.';
+    const pending = row.review || row.costUnconfirmed || (totals && !invoice.reconcile(rows, totals).verified);
+    const cost = pending ? null : invoice.unitCost(row.costo, row.cantidad);
+    const input = { name: row.nombre ?? '', code: row.codigoTipo === 'interno' ? '' : row.codigo ?? '', cost, sale: price.value };
+    save.disabled = true;
+    price.disabled = true;
+    try {
+      const catalog = window.PorcentoCatalogo;
+      let result = await catalog.save(input, { fromInvoice: true });
+      if (result.conflict) {
+        if (!confirm('«' + result.conflict.name + '» ya está guardado. ¿Actualizar el producto?')) {
+          status.textContent = 'El producto guardado sigue igual.';
+          return;
+        }
+        result = await catalog.save(input, { fromInvoice: true, expected: result.conflict.updated });
+      }
+      status.textContent = result.saved ? (cost === null ? 'Producto guardado. Revisa la factura para poder guardar el costo de este renglón.' : 'Producto y costo guardados.') :
+        'El producto cambió. Vuelve a pulsar Guardar producto para revisar la actualización.';
+    } catch (error) {
+      status.textContent = error.message || 'No se pudo guardar el producto.';
+    } finally {
+      save.disabled = false;
+      price.disabled = false;
+    }
+  };
+  section.append(heading, label, save, status);
+  return section;
 }
+
 function draw() {
   const items = $('items');
   items.replaceChildren();
@@ -311,17 +255,9 @@ function draw() {
     markupAmount.className = 'amount';
     markupAmount.dataset.markup = '50';
     markup.append(markupLabel, markupAmount);
-    const comparison = document.createElement('div');
-    comparison.className = 'nrs-compare';
-    comparison.dataset.nrsSection = '';
     const cost = document.createElement('p');
-    cost.dataset.nrsCost = '';
-    const title = document.createElement('strong');
-    title.dataset.nrsTitle = '';
-    const details = document.createElement('p');
-    details.dataset.nrsDetails = '';
-    comparison.append(cost, title, details);
-    product.append(comparison, prices, markup);
+    cost.className = 'invoice-unit-cost caption';
+    product.append(cost, prices, markup, catalogControls(row));
     items.append(product);
   });
   recalc();
@@ -332,7 +268,9 @@ function recalc() {
   [...$('items').children].forEach((product, index) => {
     const row = rows[index];
     const pending = row.review || (check && !check.verified);
-    updatePricebookCard(product, row, Boolean(check && !check.verified));
+    const cost = invoice.unitCost(row.costo, row.cantidad);
+    product.querySelector('.invoice-unit-cost').textContent = 'Costo por unidad: ' + money(cost ?? NaN) +
+      (cost !== null && (pending || row.costUnconfirmed) ? ' · provisional' : '');
     for (const amount of product.querySelectorAll('[data-margin]')) {
       const margin = Number(amount.dataset.margin);
       const price = pending ? null : invoice.suggestedPrice(row.costo, row.cantidad, margin);
@@ -385,15 +323,6 @@ function updateInvoiceSummary(check) {
     ...documentNotes
   ].filter(Boolean).join(' ') : '';
   $('export').disabled = !rows.length || Boolean(check && !check.verified);
-  if (catalog && rows.length) {
-    const target = targetMargin();
-    const comparisons = rows.map(row => pricebook.compare(row, catalog, check && !check.verified ? NaN : target ?? NaN));
-    const below = comparisons.filter(row => row.below).length;
-    const pending = comparisons.filter(row => !row.match || row.margin === null || Boolean(check && !check.verified)).length;
-    const review = target === null ? 'Escribe la meta de margen en la sección de NRS.'
-      : 'NRS: ' + below + ' precios por revisar y ' + pending + ' pendientes de confirmar.';
-    summary.textContent += (summary.textContent ? ' ' : '') + review;
-  }
 }
 
 $('printedTotalEntry').onsubmit = event => {
@@ -878,20 +807,12 @@ $('export').onclick = () => {
     return '"' + text.replace(/"/g, '""') + '"';
   };
   const lines = [['Producto', 'Costo total', 'Unidades', 'Costo por unidad', '33%', '45%', '50%', 'Por revisar', 'Precio con costo +50%']];
-  if (catalog) lines[0].push('Coincidencia NRS', 'Precio actual NRS por unidad', 'Margen bruto actual %', 'Precio sugerido para la meta', 'Revisión de precio');
   for (const row of rows) {
     const prices = margins.map(margin => row.review ? null : invoice.suggestedPrice(row.costo, row.cantidad, margin));
     const markup = row.review ? null : invoice.priceWithMarkup(row.costo, row.cantidad);
     const values = [row.nombre, row.costo, row.cantidad,
-      prices[0] === null ? '' : Number(row.costo) / Number(row.cantidad), ...prices,
+      row.review ? '' : invoice.unitCost(row.costo, row.cantidad), ...prices,
       row.warning || (row.review ? 'Revisar' : ''), markup === null ? '' : markup.toFixed(2)];
-    if (catalog) {
-      const target = targetMargin();
-      const result = pricebook.compare(row, catalog, target ?? NaN);
-      values.push(result.match?.via ?? '', result.sale === null ? '' : (result.sale / 100).toFixed(4),
-        result.margin === null ? '' : result.margin.toFixed(2), result.suggested === null ? '' : (result.suggested / 100).toFixed(2),
-        result.margin === null ? 'Pendiente de confirmar' : target === null ? 'Meta pendiente' : result.below ? 'Revisar precio' : 'Margen en meta');
-    }
     lines.push(values);
   }
   const csv = lines.map(line => line.map(quote).join(',')).join('\r\n');
@@ -903,6 +824,7 @@ $('export').onclick = () => {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 };
 updateInvoiceSummary();
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
   </script>
 </body>
 </html>
