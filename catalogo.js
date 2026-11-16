@@ -55,6 +55,9 @@
 
   const cleanCode = code => code.trim().replace(/[\s-]+/g, '');
   const barcodeKey = code => /^\d{12,14}$/.test(code) ? code.padStart(14, '0') : code;
+  // Correct only this confirmed legacy record. Other similar codes can be different products.
+  const correctedCode = '819721012045';
+  const oldCode = '8721012045';
 
   function readProduct(store, key, found) {
     const request = store.get(key);
@@ -159,9 +162,28 @@
     const request = store.getAll();
     request.onsuccess = () => done(request.result.sort((a, b) => a.name.localeCompare(b.name, 'es')));
   });
-  const findByCode = code => transaction('readonly', (store, done) => {
-    readProduct(store, 'upc:' + cleanCode(code), done);
-  });
+  function findByCode(value) {
+    const code = cleanCode(value);
+    const canCorrect = barcodeKey(code) === barcodeKey(correctedCode);
+    return transaction(canCorrect ? 'readwrite' : 'readonly', (store, done) => {
+      readProduct(store, 'upc:' + code, product => {
+        if (product || !canCorrect) { done(product); return; }
+        const request = store.get('upc:' + oldCode);
+        request.onsuccess = () => {
+          const previous = request.result;
+          if (!previous || !/^blunt ?ville triple (?:vinilla|vainilla|vanilla)$/.test(searchKey(previous.name))) {
+            done();
+            return;
+          }
+          const corrected = { ...previous, key: 'upc:' + correctedCode, code: correctedCode,
+            updated: Math.max(Date.now(), (previous.updated ?? 0) + 1) };
+          store.add(corrected);
+          store.delete(previous.key);
+          done(corrected);
+        };
+      });
+    });
+  }
   const remove = product => transaction('readwrite', (store, done) => {
     const request = store.get(product.key);
     request.onsuccess = () => {
