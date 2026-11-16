@@ -10,11 +10,11 @@ En un proyecto existente conectado a Git, publica la rama actualizada según su 
 
 ## Facturas y catálogo
 
-1. Abre **Leer factura**, toma una foto o selecciona un PDF y pulsa **Leer factura gratis**. Puedes adjuntar otra foto del total.
-2. Revisa el importe y las unidades vendibles de cada producto. **Descargar CSV** exporta el análisis.
-3. Cada renglón tiene **Guardar en catálogo** y un campo de precio de venta opcional. Si guardas de nuevo un producto y dejas el precio vacío, se conserva el precio de venta existente.
-4. Cuando hay varios renglones, marca los productos que quieras o usa **Seleccionar todos**. **Guardar seleccionados** añade los productos nuevos y avisa cuáles ya estaban guardados.
-5. Desde la calculadora, **Guardar en catálogo** abre una ficha con la compra, las unidades y el precio de venta del cálculo. En **Mi catálogo** completa la foto, el nombre, el precio total de compra, las unidades y el precio de venta por unidad. Los productos guardados desde una factura o el escáner se pueden completar después. El catálogo se guarda en IndexedDB en el navegador del dispositivo.
+1. En **Leer factura**, toma una foto o selecciona un PDF. Porcento lo lee automáticamente. Puedes adjuntar una foto del total y volver a leerlo.
+2. Los UPC de productos guardados muestran el costo anterior y el nuevo por unidad, y el margen al precio de venta guardado. Revisa los renglones pendientes antes de registrar sus compras.
+3. Pulsa **Guardar compra** o usa **Guardar seleccionados** para registrar varios renglones. Los productos guardados conservan su foto, nombre y precio de venta si dejas este último vacío.
+4. En **Escanear producto**, escribe o escanea el UPC para abrir la ficha de Mi catálogo. Puedes registrar otra compra introduciendo el costo nuevo y las unidades.
+5. En **Mi catálogo**, abre la ficha para completar la foto, editar los datos o consultar el historial de compras y su margen. Los datos se guardan en IndexedDB en el navegador del dispositivo.
 
 ## Cálculos
 

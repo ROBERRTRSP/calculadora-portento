@@ -68,8 +68,8 @@
         </div>
         <p id="productUnitCost" class="status" aria-live="polite"></p>
         <div class="field">
-          <label for="productSale">Precio de venta por unidad ($)</label>
-          <input id="productSale" inputmode="decimal" placeholder="0.00" autocomplete="off" required>
+          <label for="productSale">Precio de venta por unidad ($) <small>(opcional)</small></label>
+          <input id="productSale" inputmode="decimal" placeholder="Dejar pendiente" autocomplete="off">
         </div>
         <div class="actions">
           <button id="saveProduct" class="primary" type="submit">Guardar producto</button>
@@ -77,6 +77,10 @@
           <button id="deleteProduct" type="button" class="quiet negative" hidden>Eliminar</button>
         </div>
         <p id="editorStatus" class="status" role="status"></p>
+        <details id="purchaseHistory" hidden>
+          <summary>Historial de compras</summary>
+          <ul id="purchaseList" class="details-body"></ul>
+        </details>
       </form>
     </section>
     <section class="card" aria-label="Productos guardados">
@@ -87,7 +91,7 @@
     </section>
   </main>
   <script src="./factura.js?v=20"></script>
-  <script src="./catalogo.js?v=25"></script>
+  <script src="./catalogo.js?v=27"></script>
   <script src="./barcode.js?v=24"></script>
   <script>
     const $ = id => document.getElementById(id);
@@ -96,12 +100,14 @@
     window.PorcentoBarcode.addButton($('productCode'));
     const editor = $('catalogEditor');
     const number = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
+    const dateFormat = new Intl.DateTimeFormat('es-US', { dateStyle: 'medium' });
     let products = [];
     let editing = null;
     let saving = false;
     let productPhoto = null;
     let previewUrl;
     let thumbnailUrls = [];
+    let selectedKey = '';
     let photoRequest = 0;
 
     function showPhoto(photo) {
@@ -200,6 +206,8 @@
         prices.className = 'caption';
         prices.textContent = 'Costo por unidad: ' + (product.cost === null ? '—' : number.format(product.cost)) +
           ' · Venta: ' + (product.sale === null ? '—' : number.format(product.sale / 100));
+        const margin = catalog.grossMargin(product.cost, product.sale);
+        if (margin !== null) prices.textContent += ' · Margen: ' + margin.toFixed(1) + '%';
         const purchase = document.createElement('p');
         purchase.className = 'caption';
         purchase.textContent = 'Compra: ' + (product.purchase ? number.format(product.purchase.cents / 100) : '—') +
@@ -232,14 +240,21 @@
     function showUnitCost() {
       const { cents, units } = purchaseValues();
       const cost = cents !== null && units !== null ? cents / 100 / units : null;
-      $('productUnitCost').textContent = cost !== null ? 'Costo por unidad: ' + number.format(cost) :
-        editing?.cost != null ? 'Costo por unidad guardado: ' + number.format(editing.cost) : '';
+      const shownCost = cost ?? editing?.cost;
+      const margin = catalog.grossMargin(shownCost, invoice.moneyCents($('productSale').value));
+      $('productUnitCost').textContent = shownCost == null ? '' :
+        'Costo por unidad: ' + number.format(shownCost) + (margin === null ? '' : ' · Margen bruto: ' + margin.toFixed(1) + '%');
     }
 
     async function loadProducts() {
       try {
         products = await catalog.list();
         showProducts();
+        if (selectedKey) {
+          const product = products.find(item => item.key === selectedKey);
+          selectedKey = '';
+          if (product) openEditor(product);
+        }
       } catch {
         $('catalogStatus').textContent = 'El catálogo no está disponible en este navegador.';
       }
@@ -262,6 +277,20 @@
       showUnitCost();
       $('editorStatus').textContent = '';
       $('deleteProduct').hidden = !product;
+      const purchases = catalog.purchaseHistory(product);
+      $('purchaseHistory').hidden = !purchases.length;
+      $('purchaseHistory').open = false;
+      $('purchaseList').replaceChildren(...purchases.map(entry => {
+        const item = document.createElement('li');
+        item.textContent = [
+          entry.date ? dateFormat.format(entry.date) : 'Compra guardada anteriormente', entry.supplier,
+          number.format(entry.cost) + ' por unidad',
+          entry.purchase?.units == null ? '' : entry.purchase.units + ' unidades',
+          entry.sale == null ? '' : 'Venta: ' + number.format(entry.sale / 100),
+          entry.margin == null ? '' : 'Margen: ' + entry.margin.toFixed(1) + '%'
+        ].filter(Boolean).join(' · ');
+        return item;
+      }));
       editor.hidden = false;
       $('productName').focus();
     }
@@ -286,6 +315,7 @@
     $('catalogSearch').oninput = showProducts;
     $('productCost').oninput = showUnitCost;
     $('productUnits').oninput = showUnitCost;
+    $('productSale').oninput = showUnitCost;
     editor.onsubmit = async event => {
       event.preventDefault();
       if (saving || $('saveProduct').disabled) return;
@@ -297,7 +327,7 @@
       const { cents, units } = purchaseValues();
       const sale = $('productSale').value.trim();
       const saleCents = invoice.moneyCents(sale);
-      if (cents === null || units === null || saleCents === null || saleCents < 0) {
+      if (cents === null || units === null || (sale && (saleCents === null || saleCents < 0))) {
         $('editorStatus').textContent = cents === null ? 'Escribe el precio total de compra, con hasta dos decimales.' :
           units === null ? 'Escribe una cantidad entera mayor que cero.' : 'Escribe el precio de venta por unidad, con hasta dos decimales.';
         return;
@@ -305,7 +335,10 @@
       const input = { name: $('productName').value, code: $('productCode').value, cost: cents / 100 / units, sale, purchase: { cents, units }, photo: productPhoto };
       lockEditor(true);
       try {
-        const result = await catalog.save(input, { previousKey: editing?.key, expected: editing?.updated });
+        const changedPurchase = editing &&
+          (editing.purchase?.cents !== cents || editing.purchase?.units !== units);
+        const result = await catalog.save(input, { previousKey: editing?.key, expected: editing?.updated,
+          record: changedPurchase ? {} : undefined });
         if (result.conflict || result.stale) {
           $('editorStatus').textContent = result.conflict ? 'Ya existe un producto con ese código o nombre. Abre el producto guardado para editarlo.' :
             'El producto cambió. Vuelve a abrirlo desde la lista.';
@@ -341,6 +374,8 @@
 
     window.addEventListener('pageshow', loadProducts);
     const draft = new URLSearchParams(location.hash.slice(1));
+    selectedKey = draft.get('producto') ?? '';
+    if (selectedKey) history.replaceState(null, '', location.pathname + location.search);
     if (draft.has('compra') || draft.has('costo')) {
       history.replaceState(null, '', location.pathname + location.search);
       openEditor();

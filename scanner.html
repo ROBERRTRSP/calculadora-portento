@@ -58,7 +58,7 @@
       <input id="file" type="file" accept="image/*,application/pdf" hidden>
       <p id="selectedInvoice" class="caption" role="status"></p>
       <div class="actions invoice-actions">
-        <button class="primary" id="read" type="button">Leer factura gratis</button>
+        <button class="primary" id="read" type="button" hidden>Volver a leer factura</button>
       </div>
       <details class="invoice-disclosure" id="basicOptions">
         <summary>Ayudar al lector básico</summary>
@@ -115,21 +115,92 @@
     </details>
   </main>
   <script src="./factura.js?v=20"></script>
-  <script src="./catalogo.js?v=25"></script>
+  <script src="./catalogo.js?v=27"></script>
   <script src="./barcode.js?v=24"></script>
   <script>
 const $ = id => document.getElementById(id);
 const money = n => Number.isFinite(n) ? '$' + n.toFixed(2) : '—';
 let rows = [];
 let displayedBatchBusy = false;
+let nextSourceLine = 0;
+
+const catalog = window.PorcentoCatalogo;
+let catalogProducts = new Map();
+let invoiceSource = {};
+let invoiceReadRequest = 0;
+let manualInvoiceId = crypto.randomUUID();
+const supplierNames = {
+  azmetro: 'AZ Metro Distributors', aaa: 'AAA Wholesale', dairy: 'Jersey Dairy Express',
+  taino: 'Taíno Trading', rosas: 'Rosas Distribution'
+};
+
+function documentSource(text, format = '') {
+  const supplier = supplierNames[format || invoice.detectFormat(text)] ?? '';
+  const number = text.match(/\b(?:delivery|invoice)\s*(?:no\.?|number|#)[:. \t]*[\r\n \t]*([A-Z0-9-]{5,})\b/i)?.[1] ?? '';
+  const date = text.match(/\b(\d{1,2})[/-](\d{1,2})[/-](20\d{2})\b/);
+  const day = date ? new Date(Number(date[3]), Number(date[1]) - 1, Number(date[2]), 12) : null;
+  const dateValue = day && day.getMonth() + 1 === Number(date[1]) && day.getDate() === Number(date[2]) ? day.getTime() : null;
+  return { supplier, number: supplier && /\d/.test(number) ? number : '', date: dateValue };
+}
+
+const rowCode = row => row.codigoTipo === 'interno' ? '' : String(row.codigo ?? '').trim().replace(/[\s-]+/g, '');
+const recordId = row => (invoiceSource.id ?? manualInvoiceId) + ':' + row.sourceLine;
+const rowCost = (row, verified) => verified && !row.review && !row.costUnconfirmed ? invoice.unitCost(row.costo, row.cantidad) : null;
+const codeMatches = code => /^\d{8,14}$/.test(code);
 
 function catalogInput(row, costsVerified) {
-  const cost = costsVerified && !row.review && !row.costUnconfirmed ? invoice.unitCost(row.costo, row.cantidad) : null;
+  const cost = rowCost(row, costsVerified);
   return {
-    name: row.nombre ?? '', code: row.codigoTipo === 'interno' ? '' : row.codigo ?? '',
-    cost, sale: row.catalogSale ?? '',
-    purchase: cost === null ? null : { cents: invoice.moneyCents(row.costo), units: Number(row.cantidad) }
+    name: row.nombre ?? '', code: rowCode(row), cost, sale: row.catalogSale ?? '',
+    purchase: cost === null ? null : { cents: invoice.moneyCents(row.costo), units: Number(row.cantidad) },
+    record: { id: recordId(row), date: invoiceSource.date, supplier: invoiceSource.supplier }
   };
+}
+
+async function loadCatalogMatches() {
+  const request = ++invoiceReadRequest;
+  try {
+    const products = await catalog.list();
+    if (request !== invoiceReadRequest) return;
+    catalogProducts = new Map(products.filter(product => product.code).map(product => [product.code, product]));
+    for (const product of products.filter(product => product.code)) {
+      const key = catalog.barcodeKey(product.code);
+      if (!catalogProducts.has(key)) catalogProducts.set(key, product);
+    }
+  } catch {
+    if (request !== invoiceReadRequest) return;
+    catalogProducts = new Map();
+  }
+  recalc();
+}
+
+function showCatalogComparison(product, row, verified) {
+  const element = product.querySelector('.catalog-comparison');
+  const code = rowCode(row);
+  const known = codeMatches(code) && (catalogProducts.get(code) ?? catalogProducts.get(catalog.barcodeKey(code)));
+  const saleField = product.querySelector('.catalog-sale');
+  saleField.placeholder = known?.sale != null ? (known.sale / 100).toFixed(2) + ' guardado' : 'Dejar pendiente';
+  if (!known) {
+    element.textContent = row.codigoTipo === 'interno' ? 'Escanea el UPC para buscar en Mi catálogo.' : '';
+    return;
+  }
+  const history = catalog.purchaseHistory(known);
+  const recorded = history.some(purchase => purchase.id === recordId(row));
+  const earlier = recorded ? history.find(purchase => purchase.id !== recordId(row))?.cost : known.cost;
+  const cost = rowCost(row, verified);
+  const sale = known.sale;
+  const oldMargin = catalog.grossMargin(earlier, sale);
+  const newMargin = catalog.grossMargin(cost, sale);
+  const margin = oldMargin == null || newMargin == null ? null : oldMargin.toFixed(1) + '% → ' + newMargin.toFixed(1) + '%';
+  element.textContent = [
+    'En Mi catálogo: ' + known.name,
+    recorded ? 'Compra guardada' : '',
+    earlier == null ? '' : 'Costo anterior por unidad: ' + money(earlier),
+    cost === null ? '' : 'Costo nuevo por unidad: ' + money(cost),
+    cost !== null && earlier != null && !recorded ? (cost > earlier + 1e-9 ? 'Subió' : cost < earlier - 1e-9 ? 'Bajó' : 'Sin cambio') : '',
+    sale == null ? '' : 'Tu precio: ' + money(sale / 100),
+    margin ? 'Margen a tu precio: ' + margin : newMargin == null ? '' : 'Margen a tu precio: ' + newMargin.toFixed(1) + '%'
+  ].filter(Boolean).join(' · ');
 }
 
 function updateCatalogSelection() {
@@ -165,18 +236,23 @@ $('saveCatalogRows').onclick = async () => {
   displayedBatchBusy = true;
   updateCatalogSelection();
   try {
-    const { saved, skipped } = await window.PorcentoCatalogo.saveNewProducts(inputs);
+    const results = await catalog.saveInvoiceProducts(inputs);
     if (rows !== currentRows) return;
-    for (const index of saved) selected[index].catalogSelected = false;
+    results.forEach((result, index) => {
+      if (result.saved || result.duplicate) selected[index].catalogSelected = false;
+    });
     $('items').querySelectorAll('.catalog-choice input').forEach((input, index) => {
       input.checked = Boolean(rows[index].catalogSelected);
     });
-    const missingCost = saved.filter(index => inputs[index].cost === null).length;
+    const saved = results.filter(result => result.saved).length;
+    const duplicates = results.filter(result => result.duplicate).length;
+    const pending = results.filter(result => result.pending).length;
     status.textContent = [
-      saved.length === 1 ? '1 producto guardado.' : saved.length + ' productos guardados.',
-      skipped.length ? 'Ya estaban guardados: ' + skipped.length + '. Usa Guardar en catálogo para actualizar un producto.' : '',
-      missingCost ? 'Costos pendientes: ' + missingCost + '.' : ''
+      saved === 1 ? '1 compra guardada.' : saved ? saved + ' compras guardadas.' : '',
+      duplicates ? 'Ya registradas: ' + duplicates + '.' : '',
+      pending ? 'Por revisar: ' + pending + '. Confirma el costo y las unidades.' : ''
     ].filter(Boolean).join(' ');
+    await loadCatalogMatches();
   } catch (error) {
     if (rows === currentRows) status.textContent = error.message || 'No se pudieron guardar los productos.';
   } finally {
@@ -196,6 +272,7 @@ function catalogControls(row, index) {
   label.textContent = 'Precio de venta ($, opcional)';
   const price = document.createElement('input');
   price.inputMode = 'decimal';
+  price.className = 'catalog-sale';
   price.placeholder = 'Dejar pendiente';
   price.value = row.catalogSale ?? '';
   price.oninput = () => { row.catalogSale = price.value; };
@@ -204,7 +281,7 @@ function catalogControls(row, index) {
   field.append(label, price);
   const save = document.createElement('button');
   save.type = 'button';
-  save.textContent = 'Guardar en catálogo';
+  save.textContent = 'Guardar compra';
   const status = document.createElement('p');
   status.className = 'status';
   status.setAttribute('role', 'status');
@@ -217,17 +294,16 @@ function catalogControls(row, index) {
     save.disabled = true;
     price.disabled = true;
     try {
-      const catalog = window.PorcentoCatalogo;
-      let result = await catalog.save(input, { fromInvoice: true });
-      if (result.conflict) {
-        if (!confirm('«' + result.conflict.name + '» ya está guardado. ¿Actualizar el producto?')) {
-          status.textContent = 'El producto guardado sigue igual.';
-          return;
-        }
-        result = await catalog.save(input, { fromInvoice: true, expected: result.conflict.updated });
+      const [result] = await catalog.saveInvoiceProducts([input]);
+      status.textContent = result.saved ? 'Compra guardada en Mi catálogo.' :
+        result.duplicate ? 'Esta compra ya está registrada.' : 'Confirma el costo y las unidades antes de guardar.';
+      if (result.saved || result.duplicate) {
+        row.catalogSelected = false;
+        const checkbox = section.querySelector('input[type=checkbox]');
+        if (checkbox) checkbox.checked = false;
+        updateCatalogSelection();
+        await loadCatalogMatches();
       }
-      status.textContent = result.saved ? (input.cost === null ? 'Producto guardado. El costo de este renglón está pendiente.' : 'Producto guardado en Mi catálogo.') :
-        'El producto cambió. Vuelve a pulsar Guardar en catálogo para revisar la actualización.';
     } catch (error) {
       status.textContent = error.message || 'No se pudo guardar el producto.';
     } finally {
@@ -314,7 +390,10 @@ function draw() {
       prices.append(cell);
     }
     const codeField = field('codigo', row.codigoTipo === 'interno' ? 'Código del proveedor (puedes poner el UPC)' : 'UPC o código de barras', '');
-    product.append(heading, fields, codeField);
+    const comparison = document.createElement('p');
+    comparison.className = 'caption catalog-comparison';
+    comparison.setAttribute('aria-live', 'polite');
+    product.append(comparison, heading, fields, codeField);
     if (row.info) {
       const info = document.createElement('p');
       info.className = 'caption';
@@ -357,12 +436,14 @@ function draw() {
   });
   updateCatalogSelection();
   recalc();
+  void loadCatalogMatches();
 }
 
 function recalc() {
   const check = totals ? invoice.reconcile(rows, totals) : null;
   [...$('items').children].forEach((product, index) => {
     const row = rows[index];
+    showCatalogComparison(product, row, !check || check.verified);
     const pending = row.review || (check && !check.verified);
     const cost = invoice.unitCost(row.costo, row.cantidad);
     product.querySelector('.invoice-unit-cost').textContent = 'Costo por unidad: ' + money(cost ?? NaN) +
@@ -384,8 +465,11 @@ let totals = null;
 let documentNotes = [];
 
 function displayInvoice(result, notes = []) {
-  rows = result.rows;
   totals = result.totals;
+  const verified = invoice.reconcile(result.rows, totals).verified;
+  rows = result.rows.map((row, sourceLine) => ({ ...row, sourceLine,
+    catalogSelected: rowCost(row, verified) !== null }));
+  nextSourceLine = rows.length;
   documentNotes = Array.isArray(notes) ? notes.filter(note => typeof note === 'string').slice(0, 5) : [];
   $('printedTotal').value = totals.total === null ? '' : (totals.total / 100).toFixed(2);
   $('totalInputStatus').textContent = '';
@@ -605,6 +689,9 @@ for (const id of ['cameraFile', 'file']) {
     const file = input.files[0];
     if (!file) return;
     selectedFile = file;
+    invoiceSource = {};
+    manualInvoiceId = crypto.randomUUID();
+    nextSourceLine = 0;
     setTotalPhoto(null);
     input.value = '';
     rows = [];
@@ -616,6 +703,8 @@ for (const id of ['cameraFile', 'file']) {
     $('preview').removeAttribute('src');
     $('status').textContent = '';
     $('selectedInvoice').textContent = isPdf(file) ? 'PDF listo para leer.' : 'Foto lista para leer.';
+    $('read').hidden = false;
+    $('read').click();
   };
 }
 
@@ -704,7 +793,7 @@ async function scanPage(canvas, getWorker, totalPhoto) {
   const selectedFormat = $('invoiceFormat').value;
   const embedded = invoice.readEmbeddedInvoice(canvas.invoiceWords, selectedFormat);
   if (embedded && !totalPhoto && (readingIsVerified(embedded.reading) || (canvas.pdfMultiple && embedded.reading.rows.length > 0))) {
-    return { ...embedded, notes: [] };
+    return { ...embedded, notes: [], source: documentSource(embedded.text, selectedFormat) };
   }
   if (canvas.renderPdf) await canvas.renderPdf();
   if ($('preview').hidden) preview(canvas);
@@ -770,7 +859,7 @@ async function scanPage(canvas, getWorker, totalPhoto) {
   if (format === 'azmetro' && !canvas.pdfMultiple) {
     $('status').textContent = 'Leyendo las columnas y los descuentos de AZ Metro…';
     const az = await scanAzMetro(canvas, worker, Tesseract.PSM, firstScan, separateTotals);
-    return { ...az, notes };
+    return { ...az, notes, source: documentSource(firstText, format) };
   }
   consider(firstText);
   if (!readingIsVerified(result)) consider(firstText, separateTotals, invoice.tsvWords(firstScan.tsv));
@@ -821,7 +910,7 @@ async function scanPage(canvas, getWorker, totalPhoto) {
       notes.push('La relectura se interrumpió. Revisa los renglones recuperados.');
     }
   }
-  return { text, reading: result, notes };
+  return { text, reading: result, notes, source: documentSource(firstText, format) };
 }
 
 function combinePdfPages(pages) {
@@ -868,6 +957,10 @@ $('read').onclick = () => withInvoice(async file => {
       pages.push(await scanPage(await readCanvas(file), getWorker, selectedTotalPhoto));
     }
     const result = pages.length === 1 ? pages[0].reading : combinePdfPages(pages);
+    const source = pages[0].source;
+    const hash = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
+    const fingerprint = Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, '0')).join('');
+    invoiceSource = { ...source, id: source?.number ? source.supplier + ':' + source.number : fingerprint };
     $('raw').value = pages.map(page => page.text).join('\n');
     displayInvoice(result, pages.flatMap(page => page.notes));
     if (!readingIsVerified(result)) $('basicOptions').open = true;
@@ -892,10 +985,14 @@ $('parse').onclick = () => {
     result.totals.subtotal ??= totals.subtotal;
     if (!result.totals.adjustments.length) result.totals.adjustments = totals.adjustments;
   }
+  if (!invoiceSource.id) {
+    const source = documentSource($('raw').value, $('invoiceFormat').value);
+    invoiceSource = { ...source, id: source.number ? source.supplier + ':' + source.number : manualInvoiceId };
+  }
   displayInvoice(result);
 };
 $('add').onclick = () => {
-  rows.push({ nombre: '', costo: '', cantidad: '' });
+  rows.push({ nombre: '', costo: '', cantidad: '', sourceLine: nextSourceLine++ });
   draw();
   $('nombre-' + (rows.length - 1)).focus();
 };
