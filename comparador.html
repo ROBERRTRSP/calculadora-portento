@@ -46,7 +46,7 @@
         </div>
         <button id="lookup" type="button">Buscar</button>
       </div>
-      <div class="field product-name" id="productField" hidden>
+      <div class="field product-name" id="productField">
         <label for="name">Producto</label>
         <input id="name" placeholder="Ej. Coca-Cola 20 oz">
       </div>
@@ -61,7 +61,7 @@
       <p id="offers" class="status" aria-live="polite"></p>
     </section>
 
-    <details class="card">
+    <details class="card" id="costDetails">
       <summary>Mi costo y precio de venta</summary>
       <div class="details-body">
         <div class="fields">
@@ -79,6 +79,11 @@
           <input id="sale" type="number" min="0" step=".01" inputmode="decimal" placeholder="0.00">
         </div>
         <div id="results"></div>
+        <div class="actions manual-actions">
+          <button class="primary" id="saveCatalog" type="button">Guardar en Mi catálogo</button>
+          <a class="button" href="./catalogo.html">Ver Mi catálogo</a>
+        </div>
+        <p id="catalogStatus" class="status" role="status"></p>
       </div>
     </details>
 
@@ -116,6 +121,8 @@
       </div>
     </details>
   </main>
+  <script src="./factura.js?v=20"></script>
+  <script src="./catalogo.js?v=23"></script>
   <script>
 const $=id=>document.getElementById(id),usd=n=>'$'+n.toFixed(2);let stream=null,detector=null,raf=0,last='',html5scanner=null,scanning=false;const key=()=>'porcento_upc_'+$('upc').value.trim();let publicOffers=[],cloudOffers=[];function calc(){
 const purchase=Number($('cost').value),qty=Number($('qty').value),sale=Number($('sale').value),hasCost=$('cost').value!==''&&purchase>0,hasSale=$('sale').value!==''&&sale>0,unit=hasCost?(qty>0?purchase/qty:purchase):0;
@@ -129,7 +136,108 @@ if(!offers.length)return;
 let sale=Number($('sale').value),hasSale=$('sale').value!==''&&sale>0;
 offers.forEach(o=>{let line=document.createElement('div');line.className='row offer';let left=document.createElement('span'),right=document.createElement('span');let label=document.createElement('b');label.textContent=o.name;left.append(label);let info=document.createElement('small');info.style.display='block';info.textContent=(o.date||'')+(o.manual?'':o.cloud?(o.exact?' · UPC en el anuncio':' · Verifica UPC y tamaño'):' · Registro público');left.append(info);if(o.title){let description=document.createElement('small');description.textContent=o.title;description.style.display='block';left.append(description)}if(o.url){let a=document.createElement('a');a.href=o.url;a.target='_blank';a.rel='noopener noreferrer';a.textContent='Ver fuente';a.style.display='block';left.append(a)}let amount=document.createElement('b');amount.className='value';amount.textContent=usd(o.price);right.append(amount);if(hasSale){let d=document.createElement('small');d.style.display='block';d.textContent=sale===o.price?'Igual que tu precio':sale>o.price?'Tu precio +'+usd(sale-o.price):'Tu precio −'+usd(o.price-sale);right.append(d)}line.append(left,right);box.append(line)})
 }
-function links(){let code=$('upc').value.trim(),name=$('name').value.trim(),q=code||name;if(!q){$('links').innerHTML='<small>Introduce un UPC o producto para ver búsquedas.</small>';return}let arr=[['Walmart','https://www.walmart.com/search?q='+encodeURIComponent(q)],['Amazon','https://www.amazon.com/s?k='+encodeURIComponent(q)],['Google Shopping','https://www.google.com/search?tbm=shop&q='+encodeURIComponent(q)],['Supermercados cercanos','https://www.google.com/search?q='+encodeURIComponent((name||code)+' supermercado Paterson NJ precio')]];$('links').replaceChildren(...arr.map(([label,url])=>{let a=document.createElement('a');a.href=url;a.target='_blank';a.rel='noopener noreferrer';a.textContent=label;return a}))}function restore(){let obj;currentCode=readCode();publicOffers=[];cloudOffers=[];$('offers').textContent='';$('cloudStatus').textContent='Escanea o escribe un código para ver precios.';$('status').textContent='';try{obj=JSON.parse(localStorage.getItem(key())||'null')}catch{};['name','cost','qty','sale','walmart','amazon','local','localName'].forEach(id=>$(id).value=obj?.[id]||'');$('productField').hidden=!$('name').value;$('saved').textContent=obj?.date?'Última comparación guardada: '+new Date(obj.date).toLocaleString('es-US'):'';links();calc()}let currentCode='';const readCode=()=>$('upc').value.replace(/[\s-]/g,'');$('name').addEventListener('input',links);['cost','qty','sale','walmart','amazon','local'].forEach(id=>$(id).addEventListener('input',calc));$('localName').addEventListener('input',renderRanked);$('save').onclick=()=>{if(!/^\d{8,14}$/.test($('upc').value.trim())){$('saved').textContent='Introduce un UPC/EAN válido de 8 a 14 dígitos.';return}let o={date:new Date().toISOString()};['name','cost','qty','sale','walmart','amazon','local','localName'].forEach(id=>o[id]=$(id).value);localStorage.setItem(key(),JSON.stringify(o));$('saved').textContent='Comparación guardada: '+new Date(o.date).toLocaleString('es-US')};$('clear').onclick=()=>{['upc','name','cost','qty','sale','walmart','amazon','local','localName'].forEach(id=>$(id).value='');$('saved').textContent='';$('status').textContent='';publicOffers=[];cloudOffers=[];clearTimeout(lookupDelay);currentCode='';$('productField').hidden=true;$('cloudStatus').textContent='Escanea o escribe un código para ver precios.';$('offers').textContent='';links();calc()};
+function links(){let code=$('upc').value.trim(),name=$('name').value.trim(),q=code||name;if(!q){$('links').innerHTML='<small>Introduce un UPC o producto para ver búsquedas.</small>';return}let arr=[['Walmart','https://www.walmart.com/search?q='+encodeURIComponent(q)],['Amazon','https://www.amazon.com/s?k='+encodeURIComponent(q)],['Google Shopping','https://www.google.com/search?tbm=shop&q='+encodeURIComponent(q)],['Supermercados cercanos','https://www.google.com/search?q='+encodeURIComponent((name||code)+' supermercado Paterson NJ precio')]];$('links').replaceChildren(...arr.map(([label,url])=>{let a=document.createElement('a');a.href=url;a.target='_blank';a.rel='noopener noreferrer';a.textContent=label;return a}))}
+
+function restore(code, retainDraft = false) {
+  currentCode = code;
+  catalogRead = false;
+  recoveredUnitCost = null;
+  publicOffers = [];
+  cloudOffers = [];
+  $('offers').textContent = '';
+  $('cloudStatus').textContent = 'Escanea o escribe un código para ver precios.';
+  $('status').textContent = '';
+  $('catalogStatus').textContent = '';
+  let saved;
+  try { saved = JSON.parse(localStorage.getItem(key()) || 'null'); } catch {}
+  for (const id of ['name','cost','qty','sale','walmart','amazon','local','localName']) {
+    if (saved || !retainDraft) $(id).value = saved?.[id] ?? '';
+  }
+  $('saved').textContent = saved?.date ? 'Última comparación guardada: ' + new Date(saved.date).toLocaleString('es-US') : '';
+  links();
+  calc();
+}
+
+let currentCode = '';
+let catalogRead = false;
+let recoveredUnitCost = null;
+let lookupRequest = 0;
+const readCode = () => $('upc').value.replace(/[\s-]/g, '');
+const catalog = window.PorcentoCatalogo;
+const invoice = window.PorcentoFactura;
+const productFields = ['name', 'cost', 'qty', 'sale'];
+$('name').addEventListener('input', links);
+for (const id of ['cost','qty','sale','walmart','amazon','local']) $(id).addEventListener('input', calc);
+$('localName').addEventListener('input', renderRanked);
+
+$('saveCatalog').onclick = async () => {
+  clearTimeout(lookupDelay);
+  const status = $('catalogStatus');
+  const name = $('name').value.trim();
+  if (!name) {
+    status.textContent = 'Escribe el nombre del producto.';
+    $('name').focus();
+    return;
+  }
+  const code = readCode();
+  const costText = $('cost').value;
+  const hasQuantity = $('qty').value !== '';
+  const quantity = hasQuantity ? Number($('qty').value) : 1;
+  const keepUnitCost = recoveredUnitCost?.code === code && recoveredUnitCost.value === costText && !hasQuantity;
+  const cents = costText === '' || keepUnitCost ? null : invoice.moneyCents(costText);
+  if ($('cost').validity?.badInput || (!keepUnitCost && costText !== '' && (cents === null || cents < 0))) {
+    status.textContent = 'Escribe un costo de compra válido, con hasta dos decimales.';
+    return;
+  }
+  if ($('qty').validity?.badInput || !Number.isSafeInteger(quantity) || quantity < 1) {
+    status.textContent = 'Escribe una cantidad entera mayor que cero.';
+    return;
+  }
+  if ($('sale').validity?.badInput) {
+    status.textContent = 'Escribe un precio de venta válido.';
+    return;
+  }
+  const input = {
+    name, code, cost: cents === null ? null : invoice.unitCost(costText, quantity),
+    sale: $('sale').value,
+    purchase: cents === null ? null : { cents, units: hasQuantity ? quantity : null }
+  };
+  $('saveCatalog').disabled = true;
+  try {
+    let result = await catalog.save(input, { preserveMissing: true });
+    if (result.conflict) {
+      if (!confirm('«' + result.conflict.name + '» ya está en Mi catálogo. ¿Actualizarlo con estos datos?')) {
+        status.textContent = 'Se conservó la ficha guardada.';
+        return;
+      }
+      result = await catalog.save(input, { preserveMissing: true, expected: result.conflict.updated });
+    }
+    if (readCode() === code) {
+      status.textContent = result.saved ? 'Producto guardado en Mi catálogo.' : 'La ficha cambió. Vuelve a pulsar Guardar para revisarla.';
+    }
+  } catch (error) {
+    status.textContent = error.message || 'No se pudo guardar el producto.';
+  } finally {
+    $('saveCatalog').disabled = false;
+  }
+};
+
+$('save').onclick = () => {
+  if (!/^\d{8,14}$/.test($('upc').value.trim())) {
+    $('saved').textContent = 'Introduce un UPC/EAN válido de 8 a 14 dígitos.';
+    return;
+  }
+  const comparison = { date: new Date().toISOString() };
+  for (const id of [...productFields,'walmart','amazon','local','localName']) comparison[id] = $(id).value;
+  localStorage.setItem(key(), JSON.stringify(comparison));
+  $('saved').textContent = 'Comparación guardada: ' + new Date(comparison.date).toLocaleString('es-US');
+};
+$('clear').onclick = () => {
+  for (const id of ['upc',...productFields,'walmart','amazon','local','localName']) $(id).value = '';
+  clearTimeout(lookupDelay);
+  lookupRequest++;
+  restore('');
+};
 let lookupDelay=null;
 $('upc').addEventListener('input',()=>{clearTimeout(lookupDelay);const upc=$('upc').value.replace(/[\s-]/g,'');if(/^\d{12,14}$/.test(upc)){lookupDelay=setTimeout(()=>{if(readCode()===upc)$('lookup').click()},850)}});
 $('upc').addEventListener('keydown',e=>{if(e.key==='Enter'){clearTimeout(lookupDelay);$('lookup').click()}});
@@ -159,7 +267,48 @@ let r=await fetch(url,{signal:ctrl.signal});if(!r.ok)continue;ok=true;let data=a
 if($('upc').value.replace(/[\s-]/g,'')!==upc)return;
 let now=Date.now();publicOffers=found.filter(p=>sameUPC(p.product_code,upc)&&p.currency==='USD'&&Number(p.price)>0&&(!p.price_per||p.price_per==='UNIT')&&p.date&&now-new Date(p.date).getTime()>=0&&now-new Date(p.date).getTime()<180*86400000&&p.location&&String(p.location.osm_address_country_code||'').toUpperCase()==='US').map(p=>({name:[p.location.osm_brand||p.location.osm_name||'Comercio no identificado',p.location.osm_address_city||''].filter(Boolean).join(' · '),price:Number(p.price),date:p.date,url:'https://prices.openfoodfacts.org/api/v1/prices/'+encodeURIComponent(p.id)}));
 renderRanked();box.textContent=publicOffers.length?'Registros de Open Prices. Comprueba la fecha y la presentación.':ok?'':'No se pudo consultar Open Prices.'}
-$('lookup').onclick=async()=>{clearTimeout(lookupDelay);let code=readCode();if(!/^\d{8,14}$/.test(code)){$('status').textContent='Introduce un código UPC/EAN de 8 a 14 dígitos.';return}$('upc').value=code;if(currentCode!==code)restore();links();searchOpenPrices(code);searchCloudPrices(code,$('name').value.trim());$('status').textContent='Buscando el nombre del producto…';let sources=[['Open Food Facts','world.openfoodfacts.org'],['Open Beauty Facts','world.openbeautyfacts.org'],['Open Products Facts','world.openproductsfacts.org']], variants=code.length===12?['0'+code,code]:code.length===13&&code[0]==='0'?[code,code.slice(1)]:[code];let found=false,available=false;for(let [label,domain] of sources){if(found)break;for(let value of variants){let controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),5000);try{let r=await fetch('https://'+domain+'/api/v2/product/'+value+'.json?fields=code,product_name,product_name_en,generic_name,brands,quantity',{signal:controller.signal});if(!r.ok)continue;available=true;let d=await r.json(),p=d.product||{};if($('upc').value!==code)return;if(d.status!==1)continue;let name=String(p.product_name||p.product_name_en||p.generic_name||'').trim();if(!name)continue;let brand=String(p.brands||'').trim(),quantity=String(p.quantity||'').trim();$('name').value=[brand&&!name.toLowerCase().includes(brand.toLowerCase())?brand:'',name,quantity].filter(Boolean).join(' · ');$('status').textContent='Identificado en '+label+'.';found=true;break}catch(e){}finally{clearTimeout(timeout)}}}if($('upc').value!==code)return;$('productField').hidden=false;if(!found){$('status').textContent=available?'Escribe el nombre si lo conoces.':'Catálogo temporalmente no disponible.'}links()};async function stop(){scanning=false;cancelAnimationFrame(raf);if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}if(html5scanner){const scanner=html5scanner;html5scanner=null;try{if(scanner.isScanning)await scanner.stop()}catch(e){}try{scanner.clear()}catch(e){}}$('video').hidden=true;$('qr-reader').hidden=true;$('stop').hidden=true;$('scan').hidden=false}
+$('lookup').onclick = async () => {
+  clearTimeout(lookupDelay);
+  const code = readCode();
+  if (!/^\d{8,14}$/.test(code)) {
+    $('status').textContent = 'Introduce un código UPC/EAN de 8 a 14 dígitos.';
+    return;
+  }
+  const request = ++lookupRequest;
+  const isCurrent = () => request === lookupRequest && readCode() === code;
+  $('upc').value = code;
+  if (currentCode !== code) restore(code, !currentCode);
+  const before = productFields.map(id => $(id).value);
+  $('status').textContent = 'Buscando el producto…';
+  let saved;
+  if (!catalogRead) {
+    try {
+      saved = await catalog.findByCode(code);
+    } catch { /* Web lookup is still available if local storage is unavailable. */ }
+  }
+  if (!isCurrent()) return;
+  catalogRead = true;
+  if (saved) {
+    const purchase = saved.purchase;
+    const values = [saved.name, purchase ? (purchase.cents / 100).toFixed(2) : saved.cost, purchase?.units, saved.sale === null ? '' : (saved.sale / 100).toFixed(2)];
+    productFields.forEach((id, i) => {
+      if ($(id).value === before[i]) $(id).value = values[i] ?? '';
+    });
+    recoveredUnitCost = !purchase && saved.cost !== null ? { code, value: String(saved.cost) } : null;
+    $('catalogStatus').textContent = 'Cargado de Mi catálogo.';
+    $('costDetails').open = true;
+    calc();
+  }
+  links();
+  searchOpenPrices(code);
+  searchCloudPrices(code, $('name').value.trim());
+  if ($('name').value.trim()) {
+    $('status').textContent = '';
+    return;
+  }
+  let sources=[['Open Food Facts','world.openfoodfacts.org'],['Open Beauty Facts','world.openbeautyfacts.org'],['Open Products Facts','world.openproductsfacts.org']], variants=code.length===12?['0'+code,code]:code.length===13&&code[0]==='0'?[code,code.slice(1)]:[code];let found=false,available=false;for(let [label,domain] of sources){if(found)break;for(let value of variants){let controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),5000);try{let r=await fetch('https://'+domain+'/api/v2/product/'+value+'.json?fields=code,product_name,product_name_en,generic_name,brands,quantity',{signal:controller.signal});if(!r.ok)continue;available=true;let d=await r.json(),p=d.product||{};if(!isCurrent())return;if(d.status!==1)continue;let name=String(p.product_name||p.product_name_en||p.generic_name||'').trim();if(!name)continue;let brand=String(p.brands||'').trim(),quantity=String(p.quantity||'').trim();if (!$('name').value.trim()) $('name').value=[brand&&!name.toLowerCase().includes(brand.toLowerCase())?brand:'',name,quantity].filter(Boolean).join(' · ');$('status').textContent='Identificado en '+label+'.';found=true;break}catch(e){}finally{clearTimeout(timeout)}}}if(!isCurrent())return;if(!found){$('status').textContent=available?'Escribe el nombre si lo conoces.':'Catálogo temporalmente no disponible.'}links();
+};
+async function stop(){scanning=false;cancelAnimationFrame(raf);if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}if(html5scanner){const scanner=html5scanner;html5scanner=null;try{if(scanner.isScanning)await scanner.stop()}catch(e){}try{scanner.clear()}catch(e){}}$('video').hidden=true;$('qr-reader').hidden=true;$('stop').hidden=true;$('scan').hidden=false}
 function foundCode(raw){let code=String(raw||'').replace(/\D/g,'');if(!/^\d{8,14}$/.test(code)||!scanning)return;scanning=false;$('upc').value=code;stop();$('lookup').click()}
 async function tick(){if(!stream||!scanning)return;try{let matches=await detector.detect($('video'));if(matches.length){foundCode(matches[0].rawValue);if(!scanning)return}}catch(e){}raf=requestAnimationFrame(tick)}
 let loadingScanner=null;function loadScanner(){if(window.Html5Qrcode)return Promise.resolve();if(loadingScanner)return loadingScanner;loadingScanner=new Promise((resolve,reject)=>{const script=document.createElement('script');script.src='https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js';script.onload=()=>window.Html5Qrcode?resolve():reject(Error('Lector no disponible'));script.onerror=()=>reject(Error('No se pudo descargar el lector'));document.head.appendChild(script)}).catch(e=>{loadingScanner=null;throw e});return loadingScanner}

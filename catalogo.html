@@ -63,7 +63,7 @@
     </section>
   </main>
   <script src="./factura.js?v=20"></script>
-  <script src="./catalogo.js?v=21"></script>
+  <script src="./catalogo.js?v=23"></script>
   <script>
     const $ = id => document.getElementById(id);
     const catalog = window.PorcentoCatalogo;
@@ -91,6 +91,10 @@
         prices.className = 'caption';
         prices.textContent = 'Costo por unidad: ' + (product.cost === null ? '—' : number.format(product.cost)) +
           ' · Venta: ' + (product.sale === null ? '—' : number.format(product.sale / 100));
+        if (product.purchase) {
+          prices.textContent += ' · Compra: ' + number.format(product.purchase.cents / 100) +
+            (product.purchase.units === null ? '' : ' por ' + product.purchase.units + (product.purchase.units === 1 ? ' unidad' : ' unidades'));
+        }
         const button = document.createElement('button');
         button.type = 'button';
         button.textContent = 'Editar';

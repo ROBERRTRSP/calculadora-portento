@@ -41,28 +41,35 @@
     const saleText = input.sale.trim();
     const sale = saleText === '' ? null : window.PorcentoFactura.moneyCents(saleText);
     if (saleText && (sale === null || sale < 0)) throw Error('Escribe un precio de venta válido, con hasta dos decimales.');
-    return { key: code ? 'upc:' + code : 'nombre:' + nameKey(name), name, code, cost: input.cost ?? null, sale };
+    const purchase = input.purchase ?? null;
+    if (purchase && (!Number.isSafeInteger(purchase.cents) || purchase.cents < 0 ||
+        (purchase.units !== null && (!Number.isSafeInteger(purchase.units) || purchase.units < 1)))) {
+      throw Error('Revisa el costo de compra y las unidades.');
+    }
+    return { key: code ? 'upc:' + code : 'nombre:' + nameKey(name), name, code, cost: input.cost ?? null, sale, purchase };
   }
 
-  async function save(input, { previousKey, expected, fromInvoice = false } = {}) {
+  async function save(input, { previousKey, expected, fromInvoice = false, preserveMissing = fromInvoice } = {}) {
     const product = prepare(input);
     return transaction('readwrite', (store, done) => {
       const target = store.get(product.key);
       target.onsuccess = () => {
         const existing = target.result;
-        if (fromInvoice && expected !== undefined && existing?.updated !== expected) {
+        if (preserveMissing && expected !== undefined && existing?.updated !== expected) {
           done({ stale: true });
           return;
         }
-        if (existing && previousKey !== product.key && (!fromInvoice || expected !== existing.updated)) {
+        if (existing && previousKey !== product.key && (!preserveMissing || expected !== existing.updated)) {
           done({ conflict: existing });
           return;
         }
-        const write = () => {
-          const keep = fromInvoice && existing;
+        const write = (previous = existing) => {
+          const keep = preserveMissing && existing;
+          const cost = product.cost ?? (keep ? existing.cost : null);
           const saved = {
             ...product,
-            cost: product.cost ?? (keep ? existing.cost : null),
+            cost,
+            purchase: product.purchase ?? (cost === previous?.cost ? previous.purchase ?? null : null),
             sale: product.sale ?? (keep ? existing.sale : null),
             updated: Math.max(Date.now(), (existing?.updated ?? 0) + 1)
           };
@@ -74,7 +81,7 @@
         const previous = store.get(previousKey);
         previous.onsuccess = () => {
           if (!previous.result || previous.result.updated !== expected) done({ stale: true });
-          else write();
+          else write(previous.result);
         };
       };
     });
@@ -113,6 +120,10 @@
     const request = store.getAll();
     request.onsuccess = () => done(request.result.sort((a, b) => a.name.localeCompare(b.name, 'es')));
   });
+  const findByCode = code => transaction('readonly', (store, done) => {
+    const request = store.get('upc:' + code);
+    request.onsuccess = () => done(request.result);
+  });
   const remove = product => transaction('readwrite', (store, done) => {
     const request = store.get(product.key);
     request.onsuccess = () => {
@@ -123,5 +134,5 @@
     };
   });
 
-  window.PorcentoCatalogo = { save, saveNewProducts, list, remove, searchKey };
+  window.PorcentoCatalogo = { save, saveNewProducts, list, findByCode, remove, searchKey };
 })();
