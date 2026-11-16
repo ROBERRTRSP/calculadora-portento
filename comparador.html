@@ -45,6 +45,7 @@
       <p class="status" id="status" role="status"></p>
       <img id="savedPhoto" alt="Foto del producto" width="88" height="88" style="object-fit:contain" hidden>
       <a class="button" id="openSaved" href="./catalogo.html" hidden>Ver ficha en Mi catálogo</a>
+      <a class="button" id="linkSaved" href="./catalogo.html" hidden>Vincular a un producto guardado</a>
     </section>
 
     <details class="card" id="costDetails" open>
@@ -120,10 +121,12 @@ function showSaved(product) {
   if (savedPhotoUrl) $('savedPhoto').src = savedPhotoUrl;
   else $('savedPhoto').removeAttribute('src');
   $('openSaved').hidden = !product;
+  $('linkSaved').hidden = true;
   if (product) $('openSaved').href = './catalogo.html#producto=' + encodeURIComponent(product.key);
 }
 let recoveredUnitCost = null;
 let lookupRequest = 0;
+let linkingFromSearch = false;
 const readCode = () => $('upc').value.replace(/[\s-]/g, '');
 const catalog = window.PorcentoCatalogo;
 const invoice = window.PorcentoFactura;
@@ -206,6 +209,7 @@ let lookupDelay;
 $('upc').addEventListener('input', () => {
   clearTimeout(lookupDelay);
   lookupRequest++;
+  $('linkSaved').hidden = true;
   const code = readCode();
   if (catalog.barcodeKey(code) !== catalog.barcodeKey(currentCode)) {
     if (savedProduct) restore('');
@@ -218,9 +222,17 @@ $('upc').addEventListener('keydown', event => {
   if (event.key === 'Enter') lookupProduct();
 });
 $('lookup').onclick = () => lookupProduct();
+$('linkSaved').onclick = () => { linkingFromSearch = true; };
+window.addEventListener('pageshow', () => {
+  if (linkingFromSearch) {
+    linkingFromSearch = false;
+    lookupProduct(true);
+  }
+});
 
 async function lookupProduct(automatic = false) {
   clearTimeout(lookupDelay);
+  $('linkSaved').hidden = true;
   const code = readCode();
   if (!/^\d{8,14}$/.test(code)) {
     $('status').textContent = 'Introduce un código UPC/EAN de 8 a 14 dígitos.';
@@ -246,6 +258,8 @@ async function lookupProduct(automatic = false) {
     if (!automatic && currentCode && catalog.barcodeKey(currentCode) !== catalog.barcodeKey(code)) restore(code);
     showSaved(null);
     $('status').textContent = 'Este código todavía no está en Mi catálogo.';
+    $('linkSaved').href = './catalogo.html#vincular=' + encodeURIComponent(code);
+    $('linkSaved').hidden = false;
     return;
   }
   const sameProduct = savedProduct?.key === saved.key;

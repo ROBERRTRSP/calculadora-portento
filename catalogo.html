@@ -87,6 +87,10 @@
       <label for="catalogSearch">Buscar productos guardados</label>
       <input id="catalogSearch" type="search" placeholder="Nombre o código" autocomplete="off">
       <p id="catalogEmpty" class="status" role="status"></p>
+      <div class="actions" id="catalogLinkActions" hidden>
+        <button id="linkCatalogCode" type="button">Vincular a un producto guardado</button>
+        <button id="cancelCatalogLink" type="button" hidden>Cancelar vínculo</button>
+      </div>
       <ul id="catalogList"></ul>
     </section>
   </main>
@@ -100,6 +104,7 @@
     window.PorcentoBarcode.addButton($('productCode'));
     const catalogSearch = $('catalogSearch');
     window.PorcentoBarcode.addButton(catalogSearch, code => {
+      linkingCode = '';
       scannedCode = code;
       showProducts();
     });
@@ -108,6 +113,8 @@
     const dateFormat = new Intl.DateTimeFormat('es-US', { dateStyle: 'medium' });
     let products = [];
     let scannedCode = '';
+    let linkingCode = '';
+    let linking = false;
     let catalogState = 'loading';
     let editing = null;
     let saving = false;
@@ -187,8 +194,16 @@
       const matches = scannedCode ? (productByCode ? [productByCode] : []) :
         products.filter(product => catalog.searchKey(product.name).includes(query) || product.code.includes(query));
       const status = $('catalogEmpty');
+      const canLink = catalogState === 'ready' && scannedCode && !productByCode && products.length;
+      $('catalogLinkActions').hidden = !canLink && !linkingCode;
+      $('linkCatalogCode').hidden = !canLink || !!linkingCode;
+      $('cancelCatalogLink').hidden = !linkingCode;
+      $('cancelCatalogLink').disabled = linking;
       if (catalogState === 'unavailable') status.textContent = scannedCode ? 'No se pudo consultar Mi catálogo.' : '';
       else if (catalogState === 'loading') status.textContent = scannedCode ? 'Cargando Mi catálogo…' : '';
+      else if (linkingCode) status.textContent = matches.length
+        ? 'Elige qué producto guardado corresponde al código ' + linkingCode + '.'
+        : query ? 'No se encontraron productos con esa búsqueda.' : 'Todavía no hay productos guardados para vincular.';
       else if (scannedCode) status.textContent = productByCode ? 'Encontrado en Mi catálogo.' : 'Este código no está en Mi catálogo.';
       else status.textContent = matches.length ? '' : query ? 'No se encontraron productos.' : 'Todavía no hay productos guardados.';
       $('catalogList').replaceChildren(...matches.map(product => {
@@ -232,14 +247,51 @@
         note.textContent = pending.length ? 'Pendiente: ' + pending.join(', ') + '.' : '';
         const button = document.createElement('button');
         button.type = 'button';
-        button.textContent = pending.length ? 'Completar' : 'Editar';
+        button.textContent = linkingCode ? 'Vincular' : pending.length ? 'Completar' : 'Editar';
         button.setAttribute('aria-label', button.textContent + ' ' + product.name);
-        button.onclick = () => openEditor(product);
+        button.disabled = linking;
+        button.onclick = () => linkingCode ? linkCode(product) : openEditor(product);
         info.append(name, code, purchase, prices, note);
         item.append(thumbnail, info);
         row.append(item, button);
         return row;
       }));
+    }
+
+    function chooseProductForCode(code) {
+      linkingCode = code;
+      scannedCode = '';
+      catalogSearch.value = '';
+      showProducts();
+    }
+
+    async function linkCode(product) {
+      if (linking || !linkingCode) return;
+      const code = linkingCode;
+      const question = product.code && product.code !== code
+        ? '¿Cambiar el código de «' + product.name + '» de ' + product.code + ' a ' + code + '?'
+        : '¿Vincular el código ' + code + ' a «' + product.name + '»?';
+      if (!confirm(question)) return;
+      linking = true;
+      showProducts();
+      try {
+        const { saved, conflict } = await catalog.save({ ...product, code,
+          sale: product.sale == null ? '' : (product.sale / 100).toFixed(2)
+        }, { previousKey: product.key, expected: product.updated });
+        $('catalogStatus').textContent = saved ? 'Código vinculado a «' + saved.name + '».' :
+          conflict ? 'El código ya pertenece a «' + conflict.name + '».' : 'La ficha cambió. Vuelve a elegir el producto.';
+        if (saved || conflict) {
+          linkingCode = '';
+          scannedCode = code;
+          catalogSearch.value = code;
+        }
+        await loadProducts();
+      } catch (error) {
+        $('catalogStatus').textContent = error.message || 'No se pudo vincular el código.';
+      } finally {
+        linking = false;
+        showProducts();
+      }
     }
 
     function purchaseValues() {
@@ -329,6 +381,11 @@
 
     $('newProduct').onclick = () => openEditor();
     $('cancelProduct').onclick = closeEditor;
+    $('linkCatalogCode').onclick = () => chooseProductForCode(scannedCode);
+    $('cancelCatalogLink').onclick = () => {
+      linkingCode = '';
+      showProducts();
+    };
     catalogSearch.oninput = () => {
       scannedCode = '';
       showProducts();
@@ -395,7 +452,9 @@
     window.addEventListener('pageshow', loadProducts);
     const draft = new URLSearchParams(location.hash.slice(1));
     selectedKey = draft.get('producto') ?? '';
-    if (selectedKey) history.replaceState(null, '', location.pathname + location.search);
+    const codeToLink = draft.get('vincular') ?? '';
+    if (selectedKey || /^\d{8,14}$/.test(codeToLink)) history.replaceState(null, '', location.pathname + location.search);
+    if (/^\d{8,14}$/.test(codeToLink)) chooseProductForCode(codeToLink);
     if (draft.has('compra') || draft.has('costo')) {
       history.replaceState(null, '', location.pathname + location.search);
       openEditor();
