@@ -283,7 +283,12 @@
       }
       const bill = trimmed.match(receiptPrice);
       if (bill && recent.length) {
-        const [, purchased, type, price, lineTotal] = bill;
+        const [, purchased, type, price, printedTotal] = bill;
+        const nextLine = lines[index + 1] ?? '';
+        const continuedTotal = format === 'aaa' && !printedTotal
+          ? nextLine.replace(/^\s*[|\s]+|[|\s]+$/g, '').match(amountOnly)?.[1] : undefined;
+        const lineTotal = printedTotal ?? continuedTotal;
+        if (continuedTotal !== undefined) index++;
         const name = recent.at(-1);
         const typeIsExplicitUnit = /^(ea|each)$/i.test(type);
         const mappedSize = unitsFromDescription(name);

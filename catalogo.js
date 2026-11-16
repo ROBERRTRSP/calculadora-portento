@@ -208,7 +208,7 @@
         readProduct(store, product.key, existing => {
           if (product.cost === null) {
             results.push({ pending: true });
-          } else if (purchaseHistory(existing).some(purchase => purchase.id === record.id)) {
+          } else if (purchaseHistory(existing).some(purchase => purchase.id === record.id || Boolean(record.legacyId && purchase.id === record.legacyId))) {
             results.push({ duplicate: true, product: existing });
           } else {
             const nextProduct = existing ? { ...product, key: existing.key, code: existing.code, name: existing.name } : product;

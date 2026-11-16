@@ -119,8 +119,8 @@
       </div>
     </details>
   </main>
-  <script src="./factura.js?v=31"></script>
-  <script src="./catalogo.js?v=31"></script>
+  <script src="./factura.js?v=32"></script>
+  <script src="./catalogo.js?v=32"></script>
   <script src="./barcode.js?v=31"></script>
   <script>
 const $ = id => document.getElementById(id);
@@ -141,13 +141,20 @@ const supplierNames = {
 };
 
 function documentSource(text, format = '') {
-  const supplier = supplierNames[format || invoice.detectFormat(text)] ?? '';
-  const number = text.match(/\b(?:delivery|invoice)\s*(?:no\.?|number|#)[:. \t]*[\r\n \t]*([A-Z0-9-]{5,})\b/i)?.[1] ?? '';
-  const date = text.match(/\b(?:invoice date|delivery date|fecha(?: de (?:factura|entrega))?|date)\s*[:# ]*\s*(\d{1,2})[/-](\d{1,2})[/-](20\d{2})\b/i)
-    ?? text.match(/\b(\d{1,2})[/-](\d{1,2})[/-](20\d{2})\b/);
-  const day = date ? new Date(Number(date[3]), Number(date[1]) - 1, Number(date[2]), 12) : null;
+  const kind = format || invoice.detectFormat(text);
+  const supplier = supplierNames[kind] ?? '';
+  const fields = text.split(/\r?\n/).slice(0, 18).join('\n');
+  const number = fields.match(/\b(?:delivery|invoice)\s*(?:no\.?|number|#)[:. \t]*[\r\n \t]*([A-Z0-9-]{5,})\b/i)?.[1] ?? '';
+  const datePattern = kind === 'aaa' ? '(20\\d{2}|\\d{2})' : '(20\\d{2})';
+  const date = fields.match(new RegExp('\\b(?:invoice date|delivery date|fecha(?: de (?:factura|entrega))?|date)\\s*[:# ]*\\s*(\\d{1,2})[/-](\\d{1,2})[/-]' + datePattern + '\\b', 'i'))
+    ?? fields.match(/\b(\d{1,2})[/-](\d{1,2})[/-](20\d{2})\b/);
+  const year = date ? Number(date[3]) + (date[3].length === 2 ? 2000 : 0) : null;
+  const day = date ? new Date(year, Number(date[1]) - 1, Number(date[2]), 12) : null;
   const dateValue = day && day.getMonth() + 1 === Number(date[1]) && day.getDate() === Number(date[2]) ? day.getTime() : null;
-  return { supplier, number: supplier && /\d/.test(number) ? number : '', date: dateValue };
+  const trans = kind === 'aaa' ? fields.match(/\bTrans(?:action)?[ \t]*(?:No\.?|#)?[ \t]*:?[ \t]*(\d{4,10})\b/i)?.[1] : null;
+  const shortTicketId = trans && dateValue !== null
+    ? [year, date[1].padStart(2, '0'), date[2].padStart(2, '0'), trans].join('-') : '';
+  return { supplier, number: shortTicketId || (supplier && /\d/.test(number) ? number : ''), date: dateValue };
 }
 
 const rowCode = row => row.codigoTipo === 'interno' ? '' : String(row.codigo ?? '').trim().replace(/[\s-]+/g, '');
@@ -158,6 +165,7 @@ async function fingerprint(data) {
   return Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, '0')).join('');
 }
 const recordId = row => (invoiceSource.id ?? manualInvoiceId) + ':' + row.sourceLine;
+const legacyRecordId = row => invoiceSource.legacyId ? invoiceSource.legacyId + ':' + row.sourceLine : '';
 const rowCost = (row, verified) => verified && !row.review && !row.costUnconfirmed ? invoice.unitCost(row.costo, row.cantidad) : null;
 const codeMatches = code => /^\d{8,14}$/.test(code);
 function rowProblem(row, verified) {
@@ -175,7 +183,7 @@ function catalogInput(row, costsVerified) {
   return {
     name: row.nombre ?? '', code: rowCode(row), cost, sale: row.catalogSale ?? '',
     purchase: cost === null ? null : { cents: invoice.moneyCents(row.costo), units: Number(row.cantidad) },
-    record: { id: recordId(row), date: invoiceSource.date, supplier: invoiceSource.supplier }
+    record: { id: recordId(row), legacyId: legacyRecordId(row), date: invoiceSource.date, supplier: invoiceSource.supplier }
   };
 }
 
@@ -203,7 +211,7 @@ function showCatalogComparison(product, row, verified) {
     return;
   }
   const history = catalog.purchaseHistory(known);
-  const recordedIndex = history.findIndex(purchase => purchase.id === recordId(row));
+  const recordedIndex = history.findIndex(purchase => purchase.id === recordId(row) || Boolean(legacyRecordId(row) && purchase.id === legacyRecordId(row)));
   const recorded = recordedIndex >= 0;
   const earlier = recorded ? history[recordedIndex + 1]?.cost : Number.isFinite(invoiceSource.date)
     ? history.find(purchase => purchase.date == null || purchase.date <= invoiceSource.date)?.cost : known.cost;
@@ -842,6 +850,61 @@ async function scanAzMetro(canvas, worker, modes, initial, separateTotals) {
   return { reading, text: bestText, notes: [] };
 }
 
+async function readAaaSections(canvas, recognize, headerText, baseline, separateTotals) {
+  const parse = text => invoice.parseText(text, { format: 'aaa' });
+  const sections = [[.09, .41], [.35, .61], [.55, .79], [.72, .94]];
+  const width = canvas.width / canvas.height;
+  const [left, right] = width >= .53 ? [.27, .78] : [.01, .99];
+  const parts = [];
+  for (const [top, bottom] of sections) {
+    const text = await recognize(ocrRegion(canvas, top, bottom, left, right, 3));
+    const blocks = text.split(/(?=^[\s|]*[IlTt]tem\s*No\.?\s*[:.;]*\s*\d{4,8}\b)/gim);
+    const itemText = new Map();
+    for (const block of blocks) {
+      const item = block.match(/^[\s|]*[IlTt]tem\s*No\.?\s*[:.;]*\s*(\d{4,8})\b/i);
+      if (!item) continue;
+      itemText.set(item[1], block.split(/^\s*(?:total\b|credit cards?\b|number of items\b)/im)[0].trim());
+    }
+    parts.push({ itemText, ...parse(text) });
+  }
+  const footer = separateTotals?.total != null ? separateTotals :
+    parts.find(part => part.totals.total !== null)?.totals ?? baseline.totals;
+  const printedTotal = baseline.totals.total;
+  const totals = { ...baseline.totals, ...footer,
+    conflictingTotal: Boolean(baseline.totals.conflictingTotal || footer.conflictingTotal ||
+      (printedTotal !== null && footer.total !== null && printedTotal !== footer.total)),
+    foreignCurrency: baseline.totals.foreignCurrency || footer.foreignCurrency ||
+      parts.some(part => part.totals.foreignCurrency),
+    adjustments: baseline.totals.adjustments.includes(null) ? baseline.totals.adjustments :
+      footer.adjustments.length ? footer.adjustments : baseline.totals.adjustments
+  };
+  const merged = new Map();
+  for (const part of parts) {
+    const seen = new Set();
+    for (const row of part.rows) {
+      // An overlap can repeat an item. Preserve the original full read if the repeated data disagree.
+      if (!row.codigo || seen.has(row.codigo)) return null;
+      seen.add(row.codigo);
+      const previous = merged.get(row.codigo);
+      if (previous && (previous.row.costo !== row.costo ||
+          (previous.row.cantidad && row.cantidad && previous.row.cantidad !== row.cantidad))) return null;
+      if (!previous || (previous.row.review && !row.review)) {
+        const block = part.itemText.get(row.codigo);
+        if (!block) return null;
+        merged.set(row.codigo, { row, block });
+      }
+    }
+  }
+  const entries = [...merged.values()];
+  const reading = { rows: entries.map(entry => entry.row), totals };
+  if (!reading.rows.length || !invoice.preferReading(baseline, reading)) return null;
+  const header = headerText.split(/^\s*(?:description\b|[IlTt]tem\s*No\.?\s*[:.;])/im)[0];
+  const adjustments = totals.adjustments.map(cents => 'Recargo ' + (cents === null ? '?' : (cents / 100).toFixed(2)));
+  const subtotal = totals.subtotal === null ? '' : 'Subtotal ' + (totals.subtotal / 100).toFixed(2);
+  const totalLine = totals.total === null ? '' : 'Total ' + (totals.total / 100).toFixed(2);
+  return { reading, text: [header.trim(), ...entries.map(entry => entry.block), ...adjustments, subtotal, totalLine].join('\n') };
+}
+
 async function scanPage(canvas, getWorker, totalPhoto) {
   const selectedFormat = $('invoiceFormat').value;
   const embedded = invoice.readEmbeddedInvoice(canvas.invoiceWords, selectedFormat);
@@ -863,6 +926,16 @@ async function scanPage(canvas, getWorker, totalPhoto) {
   const firstScan = (await worker.recognize(canvas, {}, { text: true, tsv: true })).data;
   const firstText = firstScan.text;
   let format = selectedFormat || invoice.detectFormat(firstText);
+  let headerText = firstText;
+  if ((!format || format === 'aaa') && !documentSource(firstText, format).number) {
+    try {
+      const header = await recognize(ocrRegion(canvas, 0, .24, .22, .82, 3));
+      if (format === 'aaa' || invoice.detectFormat(header) === 'aaa') {
+        format = 'aaa';
+        if (documentSource(header, format).number) headerText = header;
+      }
+    } catch { /* The original full-page read remains available. */ }
+  }
   const parse = input => invoice.parseText(input, { format: format || undefined });
   const firstTotal = parse(firstText).totals.total;
   const consider = (input, footer = separateTotals, words = []) => {
@@ -917,6 +990,14 @@ async function scanPage(canvas, getWorker, totalPhoto) {
   consider(firstText);
   if (!readingIsVerified(result)) consider(firstText, separateTotals, invoice.tsvWords(firstScan.tsv));
   if (embedded) consider(embedded.text, separateTotals, canvas.invoiceWords);
+  if (format === 'aaa' && !readingIsVerified(result)) {
+    $('status').textContent = 'Leyendo el ticket de AAA Wholesale por secciones…';
+    try {
+      await setMode(Tesseract.PSM.SINGLE_BLOCK);
+      const split = await readAaaSections(canvas, recognize, headerText, result, separateTotals);
+      if (split) ({ reading: result, text } = split);
+    } catch { /* Continue with the existing rereads if a section is unreadable. */ }
+  }
   if (!readingIsVerified(result)) {
     $('status').textContent = 'Ampliando la tabla y revisando los importes…';
     try {
@@ -963,7 +1044,7 @@ async function scanPage(canvas, getWorker, totalPhoto) {
       notes.push('La relectura se interrumpió. Revisa los renglones recuperados.');
     }
   }
-  return { text, reading: result, notes, source: documentSource(firstText, format) };
+  return { text, reading: result, notes, source: documentSource(headerText, format) };
 }
 
 function combinePdfPages(pages) {
@@ -1024,8 +1105,9 @@ $('read').onclick = () => withInvoice(async file => {
     }
     const result = pages.length === 1 ? pages[0].reading : combinePdfPages(pages);
     const source = pages[0].source;
-    const id = invoiceNumberId(source) || await fingerprint(await file.arrayBuffer());
-    invoiceSource = { ...source, id };
+    const documentId = invoiceNumberId(source);
+    const verifiedFileId = !documentId || source.supplier === 'AAA Wholesale' ? await fingerprint(await file.arrayBuffer()) : '';
+    invoiceSource = { ...source, id: documentId || verifiedFileId, legacyId: documentId ? verifiedFileId : '' };
     $('raw').value = pages.map(page => page.text).join('\n');
     analyzedText = normalizedText($('raw').value);
     displayInvoice(result, pages.flatMap(page => page.notes));
@@ -1049,7 +1131,7 @@ $('parse').onclick = async () => {
   const source = documentSource(text, format);
   const previous = invoiceSource;
   const numberId = invoiceNumberId(source);
-  const sameInvoice = numberId ? previous.id === numberId : text === analyzedText;
+  const sameInvoice = text === analyzedText || Boolean(numberId && previous.id === numberId);
   const id = numberId || (sameInvoice && previous.id) ||
     'texto:' + await fingerprint(new TextEncoder().encode(text));
   if (text !== normalizedText($('raw').value) || previous !== invoiceSource) return;
@@ -1068,7 +1150,8 @@ $('parse').onclick = async () => {
       result.totals.manualAdjustments = totals.manualAdjustments;
     }
   }
-  invoiceSource = { ...source, date: source.date ?? (sameInvoice ? previous.date : null), id };
+  invoiceSource = { ...source, date: source.date ?? (sameInvoice ? previous.date : null), id,
+    legacyId: sameInvoice ? previous.legacyId : '' };
   analyzedText = text;
   displayInvoice(result);
 };
