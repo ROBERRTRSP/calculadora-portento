@@ -81,6 +81,9 @@
         <div><small>Ganancia por unidad</small><strong class="amount" id="saleProfit"></strong></div>
         <div><small>Ganancia total</small><strong class="amount" id="totalProfit"></strong></div>
       </div>
+      <div class="actions field">
+        <button id="saveCalculation" type="button" disabled>Guardar en catálogo</button>
+      </div>
     </section>
 
     <nav class="tools" aria-label="Herramientas">
@@ -119,6 +122,7 @@
       const purchase = cost.valueAsNumber;
       const unit = purchase / units;
       const validCost = Number.isFinite(unit) && purchase >= 0 && validUnits;
+      $('saveCalculation').disabled = !validCost;
       $('inputStatus').textContent = !validUnits ? 'Escribe una cantidad entera mayor que cero.'
         : purchase < 0 ? 'El costo debe ser de $0 o más.' : '';
       $('unit').textContent = validCost ? money.format(unit) : '—';
@@ -145,6 +149,13 @@
 
     form.addEventListener('input', calculate);
     form.addEventListener('submit', event => event.preventDefault());
+    $('saveCalculation').onclick = () => {
+      const units = quantity.value === '' ? 1 : quantity.valueAsNumber;
+      const unitCost = cost.valueAsNumber / units;
+      if (!Number.isFinite(unitCost) || unitCost < 0 || !Number.isInteger(units) || units < 1) return;
+      const draft = new URLSearchParams({ costo: String(unitCost), venta: sale.value });
+      location.href = './catalogo.html#' + draft;
+    };
     for (const [current, next] of [[cost, quantity], [quantity, sale], [sale, null]]) {
       current.addEventListener('keydown', event => {
         if (event.key !== 'Enter') return;

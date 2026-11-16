@@ -80,6 +80,35 @@
     });
   }
 
+  async function saveNewProducts(inputs) {
+    const products = inputs.map(input => {
+      try {
+        return prepare(input);
+      } catch (error) {
+        throw Error((input.name.trim() || 'Producto sin nombre') + ': ' + error.message);
+      }
+    });
+    return transaction('readwrite', (store, done) => {
+      const saved = [];
+      const skipped = [];
+      function next(index) {
+        const product = products[index];
+        if (!product) { done({ saved, skipped }); return; }
+        const request = store.get(product.key);
+        request.onsuccess = () => {
+          if (request.result) {
+            skipped.push(index);
+          } else {
+            store.add({ ...product, updated: Date.now() });
+            saved.push(index);
+          }
+          next(index + 1);
+        };
+      }
+      next(0);
+    });
+  }
+
   const list = () => transaction('readonly', (store, done) => {
     const request = store.getAll();
     request.onsuccess = () => done(request.result.sort((a, b) => a.name.localeCompare(b.name, 'es')));
@@ -94,5 +123,5 @@
     };
   });
 
-  window.PorcentoCatalogo = { save, list, remove, searchKey };
+  window.PorcentoCatalogo = { save, saveNewProducts, list, remove, searchKey };
 })();

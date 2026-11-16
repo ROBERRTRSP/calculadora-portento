@@ -38,7 +38,10 @@
     #raw { min-height: 100px; resize: vertical; }
     .invoice-unit-cost { margin-top: 8px; }
     .save-to-catalog { margin-top: 6px; }
-    .save-to-catalog button { margin-top: 6px; }
+    .save-to-catalog .actions { align-items: end; }
+    #catalogBatch { padding: 8px 0; }
+    .catalog-choice { display: flex; align-items: center; gap: 8px; min-height: 44px; margin: 0; }
+    .catalog-choice input { appearance: auto; width: 18px; min-height: auto; height: 18px; accent-color: var(--accent); }
   </style>
 </head>
 <body>
@@ -89,6 +92,13 @@
         <button type="submit">Comprobar total</button>
         <p id="totalInputStatus" class="status" role="status"></p>
       </form>
+      <div id="catalogBatch" hidden>
+        <div class="actions">
+          <label class="catalog-choice"><input type="checkbox" id="selectCatalogRows">Seleccionar todos</label>
+          <button id="saveCatalogRows" type="button" disabled>Guardar seleccionados</button>
+        </div>
+        <p id="catalogBatchStatus" class="status" role="status"></p>
+      </div>
       <div id="items"></div>
       <div class="actions invoice-actions">
         <button id="add" type="button">Añadir producto</button>
@@ -105,26 +115,94 @@
     </details>
   </main>
   <script src="./factura.js?v=20"></script>
-  <script src="./catalogo.js?v=20"></script>
+  <script src="./catalogo.js?v=21"></script>
   <script>
 const $ = id => document.getElementById(id);
 const money = n => Number.isFinite(n) ? '$' + n.toFixed(2) : '—';
 let rows = [];
+let displayedBatchBusy = false;
 
-function catalogControls(row) {
-  const section = document.createElement('details');
+function catalogInput(row, costsVerified) {
+  const cost = costsVerified && !row.review && !row.costUnconfirmed ? invoice.unitCost(row.costo, row.cantidad) : null;
+  return {
+    name: row.nombre ?? '', code: row.codigoTipo === 'interno' ? '' : row.codigo ?? '',
+    cost, sale: row.catalogSale ?? ''
+  };
+}
+
+function updateCatalogSelection() {
+  const selected = rows.filter(row => row.catalogSelected).length;
+  const all = $('selectCatalogRows');
+  $('catalogBatch').hidden = rows.length < 2;
+  all.checked = rows.length > 0 && selected === rows.length;
+  all.indeterminate = selected > 0 && selected < rows.length;
+  all.disabled = displayedBatchBusy;
+  $('saveCatalogRows').disabled = !selected || displayedBatchBusy;
+  $('saveCatalogRows').textContent = selected ? 'Guardar seleccionados (' + selected + ')' : 'Guardar seleccionados';
+}
+
+$('selectCatalogRows').onchange = () => {
+  for (const row of rows) row.catalogSelected = $('selectCatalogRows').checked;
+  for (const input of $('items').querySelectorAll('.catalog-choice input')) input.checked = $('selectCatalogRows').checked;
+  $('catalogBatchStatus').textContent = '';
+  updateCatalogSelection();
+};
+
+$('saveCatalogRows').onclick = async () => {
+  const selected = rows.filter(row => row.catalogSelected);
+  if (!selected.length || displayedBatchBusy) return;
+  const status = $('catalogBatchStatus');
+  status.textContent = '';
+  if (totals?.foreignCurrency) {
+    status.textContent = 'La factura está en otra moneda. Añade los productos desde Mi catálogo con sus precios en dólares.';
+    return;
+  }
+  const costsVerified = !totals || invoice.reconcile(rows, totals).verified;
+  const inputs = selected.map(row => catalogInput(row, costsVerified));
+  const currentRows = rows;
+  displayedBatchBusy = true;
+  updateCatalogSelection();
+  try {
+    const { saved, skipped } = await window.PorcentoCatalogo.saveNewProducts(inputs);
+    if (rows !== currentRows) return;
+    for (const index of saved) selected[index].catalogSelected = false;
+    $('items').querySelectorAll('.catalog-choice input').forEach((input, index) => {
+      input.checked = Boolean(rows[index].catalogSelected);
+    });
+    const missingCost = saved.filter(index => inputs[index].cost === null).length;
+    status.textContent = [
+      saved.length === 1 ? '1 producto guardado.' : saved.length + ' productos guardados.',
+      skipped.length ? 'Ya estaban guardados: ' + skipped.length + '. Usa Guardar en catálogo para actualizar un producto.' : '',
+      missingCost ? 'Costos pendientes: ' + missingCost + '.' : ''
+    ].filter(Boolean).join(' ');
+  } catch (error) {
+    if (rows === currentRows) status.textContent = error.message || 'No se pudieron guardar los productos.';
+  } finally {
+    displayedBatchBusy = false;
+    updateCatalogSelection();
+  }
+};
+
+function catalogControls(row, index) {
+  const section = document.createElement('div');
   section.className = 'save-to-catalog';
-  const heading = document.createElement('summary');
-  heading.textContent = 'Guardar en mi catálogo';
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+  const field = document.createElement('div');
+  field.className = 'field';
   const label = document.createElement('label');
-  label.textContent = 'Precio de venta por unidad ($, opcional)';
+  label.textContent = 'Precio de venta ($, opcional)';
   const price = document.createElement('input');
   price.inputMode = 'decimal';
   price.placeholder = 'Dejar pendiente';
-  label.append(price);
+  price.value = row.catalogSale ?? '';
+  price.oninput = () => { row.catalogSale = price.value; };
+  price.id = 'catalog-sale-' + index;
+  label.htmlFor = price.id;
+  field.append(label, price);
   const save = document.createElement('button');
   save.type = 'button';
-  save.textContent = 'Guardar producto';
+  save.textContent = 'Guardar en catálogo';
   const status = document.createElement('p');
   status.className = 'status';
   status.setAttribute('role', 'status');
@@ -133,9 +211,7 @@ function catalogControls(row) {
       status.textContent = 'Esta factura está en otra moneda. Añade el producto desde Mi catálogo con sus precios en dólares.';
       return;
     }
-    const pending = row.review || row.costUnconfirmed || (totals && !invoice.reconcile(rows, totals).verified);
-    const cost = pending ? null : invoice.unitCost(row.costo, row.cantidad);
-    const input = { name: row.nombre ?? '', code: row.codigoTipo === 'interno' ? '' : row.codigo ?? '', cost, sale: price.value };
+    const input = catalogInput(row, !totals || invoice.reconcile(rows, totals).verified);
     save.disabled = true;
     price.disabled = true;
     try {
@@ -148,8 +224,8 @@ function catalogControls(row) {
         }
         result = await catalog.save(input, { fromInvoice: true, expected: result.conflict.updated });
       }
-      status.textContent = result.saved ? (cost === null ? 'Producto guardado. Revisa la factura para poder guardar el costo de este renglón.' : 'Producto y costo guardados.') :
-        'El producto cambió. Vuelve a pulsar Guardar producto para revisar la actualización.';
+      status.textContent = result.saved ? (input.cost === null ? 'Producto guardado. El costo de este renglón está pendiente.' : 'Producto guardado en Mi catálogo.') :
+        'El producto cambió. Vuelve a pulsar Guardar en catálogo para revisar la actualización.';
     } catch (error) {
       status.textContent = error.message || 'No se pudo guardar el producto.';
     } finally {
@@ -157,12 +233,28 @@ function catalogControls(row) {
       price.disabled = false;
     }
   };
-  section.append(heading, label, save, status);
+  actions.append(field, save);
+  section.append(actions, status);
+  if (rows.length > 1) {
+    const choice = document.createElement('label');
+    choice.className = 'catalog-choice';
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = Boolean(row.catalogSelected);
+    checkbox.onchange = () => {
+      row.catalogSelected = checkbox.checked;
+      $('catalogBatchStatus').textContent = '';
+      updateCatalogSelection();
+    };
+    choice.append(checkbox, 'Seleccionar para guardar');
+    section.append(choice);
+  }
   return section;
 }
 
 function draw() {
   const items = $('items');
+  $('catalogBatchStatus').textContent = '';
   items.replaceChildren();
   rows.forEach((row, index) => {
     const product = document.createElement('article');
@@ -257,9 +349,10 @@ function draw() {
     markup.append(markupLabel, markupAmount);
     const cost = document.createElement('p');
     cost.className = 'invoice-unit-cost caption';
-    product.append(cost, prices, markup, catalogControls(row));
+    product.append(cost, prices, markup, catalogControls(row, index));
     items.append(product);
   });
+  updateCatalogSelection();
   recalc();
 }
 
@@ -798,7 +891,11 @@ $('parse').onclick = () => {
   }
   displayInvoice(result);
 };
-$('add').onclick = () => { rows.push({ nombre: '', costo: '', cantidad: '' }); draw(); };
+$('add').onclick = () => {
+  rows.push({ nombre: '', costo: '', cantidad: '' });
+  draw();
+  $('nombre-' + (rows.length - 1)).focus();
+};
 $('export').onclick = () => {
   if ($('export').disabled) return;
   const quote = value => {

@@ -63,7 +63,7 @@
     </section>
   </main>
   <script src="./factura.js?v=20"></script>
-  <script src="./catalogo.js?v=20"></script>
+  <script src="./catalogo.js?v=21"></script>
   <script>
     const $ = id => document.getElementById(id);
     const catalog = window.PorcentoCatalogo;
@@ -186,6 +186,13 @@
     };
 
     window.addEventListener('pageshow', loadProducts);
+    const draft = new URLSearchParams(location.hash.slice(1));
+    if (draft.has('costo')) {
+      history.replaceState(null, '', location.pathname + location.search);
+      openEditor();
+      $('productCost').value = draft.get('costo');
+      $('productSale').value = draft.get('venta') ?? '';
+    }
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
   </script>
 </body>

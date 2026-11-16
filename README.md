@@ -12,8 +12,9 @@ En un proyecto existente conectado a Git, publica la rama actualizada según su 
 
 1. Abre **Leer factura**, toma una foto o selecciona un PDF y pulsa **Leer factura gratis**. Puedes adjuntar otra foto del total.
 2. Revisa el importe y las unidades vendibles de cada producto. **Descargar CSV** exporta el análisis.
-3. En cada renglón, **Guardar en mi catálogo** permite guardar el producto, su costo por unidad y un precio de venta opcional. Si guardas de nuevo un producto y dejas el precio vacío, se conserva el precio de venta existente.
-4. En **Mi catálogo** puedes añadir, buscar, editar y eliminar productos. El catálogo se guarda en IndexedDB en el navegador del dispositivo.
+3. Cada renglón tiene **Guardar en catálogo** y un campo de precio de venta opcional. Si guardas de nuevo un producto y dejas el precio vacío, se conserva el precio de venta existente.
+4. Cuando hay varios renglones, marca los productos que quieras o usa **Seleccionar todos**. **Guardar seleccionados** añade los productos nuevos y avisa cuáles ya estaban guardados.
+5. Desde la calculadora, **Guardar en catálogo** abre una ficha con los precios del cálculo. En **Mi catálogo** puedes añadir, buscar, editar y eliminar productos. El catálogo se guarda en IndexedDB en el navegador del dispositivo.
 
 ## Cálculos
 
