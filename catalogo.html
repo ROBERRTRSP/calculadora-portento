@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#f2f2f7">
-  <link rel="stylesheet" href="./porcento.css">
+  <link rel="stylesheet" href="./porcento.css?v=24">
   <title>Mi catálogo · Porcento</title>
   <style>
     #catalogEditor { margin-top: 10px; }
@@ -64,9 +64,11 @@
   </main>
   <script src="./factura.js?v=20"></script>
   <script src="./catalogo.js?v=23"></script>
+  <script src="./barcode.js?v=24"></script>
   <script>
     const $ = id => document.getElementById(id);
     const catalog = window.PorcentoCatalogo;
+    window.PorcentoBarcode.addButton($('productCode'));
     const editor = $('catalogEditor');
     const number = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
     let products = [];

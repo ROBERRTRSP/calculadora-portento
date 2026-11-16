@@ -141,6 +141,13 @@ button:active, .button:active { opacity: .75; }
 .actions > .field { flex-grow: 3; }
 
 .icon { width: 20px; height: 20px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+.barcode-field { display: flex; gap: 8px; align-items: center; }
+.barcode-field input { flex: 1; }
+.barcode-field button { flex: none; min-width: 44px; }
+.barcode-dialog { width: min(440px, calc(100% - 24px)); max-height: 90dvh; padding: 16px; border: 1px solid var(--hairline); border-radius: var(--radius); background: var(--surface); color: var(--ink); }
+.barcode-dialog::backdrop { background: rgb(0 0 0 / 50%); }
+.barcode-dialog .actions { margin-top: 12px; }
+.barcode-preview { width: 100%; margin-top: 12px; background: #141414; border-radius: 12px; overflow: hidden; }
 
 details.card { padding-block: 0; }
 summary {
