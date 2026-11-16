@@ -12,6 +12,8 @@
   <style>
     .calculator-header { min-height: 44px; margin-bottom: 6px; }
     .calculator-header button { padding-inline: 8px; }
+    .calculator-actions { display: flex; align-items: center; gap: 4px; }
+    .calculator-actions .scan-product { gap: 5px; padding-inline: 9px; }
     .unit { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: baseline; border-bottom: 1px solid var(--hairline); padding-bottom: 7px; }
     .unit h2 { font-size: 15px; }
     .unit .amount { font-size: 21px; }
@@ -34,7 +36,13 @@
   <main class="app">
     <header class="page-header calculator-header">
       <h1>Porcento</h1>
-      <button class="quiet" id="reset" type="button">Limpiar</button>
+      <div class="calculator-actions">
+        <a class="button scan-product" href="./comparador.html?escanear=1#scan" aria-label="Escanear producto">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7V4h4m10 0h4v3M3 17v3h4m10 0h4v-3M7 8v8m3-8v8m4-8v8m3-8v8"/></svg>
+          Escanear
+        </a>
+        <button class="quiet" id="reset" type="button">Limpiar</button>
+      </div>
     </header>
 
     <form class="card" id="calculator">

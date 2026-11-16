@@ -168,6 +168,9 @@ $('scan').onclick=async()=>{if(!navigator.mediaDevices?.getUserMedia){$('status'
 $('photoButton').onclick=()=>$('photo').click();
 $('photo').onchange=async()=>{let file=$('photo').files?.[0];if(!file)return;await stop();scanning=true;$('status').textContent='Leyendo el código de la foto…';try{await loadScanner();$('qr-reader').hidden=false;let F=window.Html5QrcodeSupportedFormats;html5scanner=new Html5Qrcode('qr-reader',{formatsToSupport:[F.EAN_13,F.EAN_8,F.UPC_A,F.UPC_E],verbose:false});let code=await html5scanner.scanFile(file,true);foundCode(code);if(scanning){await stop();$('status').textContent='No se encontró un código UPC/EAN en la foto.'}}catch(e){await stop();$('status').textContent='No pude leer la foto. Tómala de cerca, recta y sin reflejos.'}finally{$('photo').value=''}};
 $('stop').onclick=stop;window.addEventListener('pagehide',stop);links();calc();
+if (new URLSearchParams(location.search).get('escanear') === '1') {
+  $('scan').click();
+}
   </script>
 </body>
 </html>
