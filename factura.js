@@ -308,6 +308,8 @@
           else if (/^sub\s*total/i.test(label)) subtotal = value;
           else if (/^total$/i.test(label)) genericTotal = value;
           else total = value;
+        } else if (adjustmentMatch && (tail || !totalText || !/[a-z]{3}/i.test(totalText))) {
+          adjustments.push({ importe: null });
         }
         continue;
       }
@@ -327,7 +329,12 @@
       attachCode = false;
       const bill = receiptLine(trimmed).replace(/^(?:[^A-Za-z0-9]+|[A-Za-z]{1,3}\s+(?=\d))/, '').replace(/\s+[A-Za-z]{1,3}\s+(?=\d+[.,]\d{2}\s*$)/, ' ').match(receiptPrice);
       if (bill && recent.length) {
-        const [, purchased, type, price, lineTotal] = bill;
+        const [, purchased, type, price, printedTotal] = bill;
+        const nextLine = lines[index + 1] ?? '';
+        const continuedTotal = format === 'aaa' && !printedTotal
+          ? nextLine.replace(/^\s*[|\s]+|[|\s]+$/g, '').match(amountOnly)?.[1] : undefined;
+        const lineTotal = printedTotal ?? continuedTotal;
+        if (continuedTotal !== undefined) index++;
         const name = productName(recent.at(-1));
         const typeIsExplicitUnit = /^(ea|each)$/i.test(type);
         const mappedSize = packSize(name, format);
@@ -596,17 +603,22 @@
     return cents !== null && cents >= 0 && units !== null ? cents / 100 / units : null;
   }
 
+  function roundedPrice(cost, quantity, numerator, denominator) {
+    const cents = moneyCents(cost);
+    const units = count(quantity);
+    if (cents === null || cents < 0 || units === null || denominator <= 0) return null;
+    const top = BigInt(cents) * BigInt(numerator);
+    const bottom = BigInt(units) * BigInt(denominator);
+    return Number((top + bottom - 1n) / bottom) / 100;
+  }
+
   function suggestedPrice(cost, quantity, margin) {
-    const perUnit = unitCost(cost, quantity);
-    return perUnit > 0 ? Math.ceil((perUnit / (1 - margin / 100) - 1e-9) * 100) / 100 : null;
+    if (!Number.isInteger(margin) || margin < 0 || margin >= 100) return null;
+    return roundedPrice(cost, quantity, 100, 100 - margin);
   }
 
   function priceWithMarkup(cost, quantity) {
-    const purchase = amount(cost);
-    const units = count(quantity);
-    if (purchase === null || units === null) return null;
-    const unitPriceInCents = purchase / units * 150;
-    return Number.isFinite(unitPriceInCents) ? Math.max(0, Math.ceil(unitPriceInCents - 1e-9)) / 100 : null;
+    return roundedPrice(cost, quantity, 3, 2);
   }
 
   const invoice = { normalize, parseText, collapseRows, unitCost, suggestedPrice, priceWithMarkup, moneyCents, reconcile, preferReading, detectFormat, readColumns, tsvWords, chooseTableReading, readEmbeddedInvoice, readAzTable,

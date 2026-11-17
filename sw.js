@@ -1,5 +1,11 @@
-const CACHE = 'porcento-v27';
-const ASSETS = ['./', './index.html', './scanner.html', './catalogo.html', './comparador.html', './manifest.webmanifest', './porcento.css?v=27', './factura.js?v=27', './catalogo.js?v=27', './barcode.js?v=27', './icon-180.png', './icon-512.png'];
+const CACHE = 'porcento-v33';
+const ASSETS = [
+  './', './index.html', './scanner.html', './catalogo.html', './comparador.html',
+  './manifest.webmanifest', './porcento.css', './porcento.css?v=24',
+  './factura.js', './factura.js?v=31', './factura.js?v=32',
+  './catalogo.js?v=31', './catalogo.js?v=32', './barcode.js?v=31',
+  './icon-180.png', './icon-512.png'
+];
 self.addEventListener('install', event => event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS)).then(() => self.skipWaiting())));
 self.addEventListener('activate', event => event.waitUntil(Promise.all([
   self.clients.claim(),
