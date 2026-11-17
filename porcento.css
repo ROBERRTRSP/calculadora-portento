@@ -144,7 +144,9 @@ button:active, .button:active { opacity: .75; }
 .barcode-field { display: flex; gap: 8px; align-items: center; }
 .barcode-field input { flex: 1; }
 .barcode-field button { flex: none; min-width: 44px; }
-.barcode-dialog { width: min(440px, calc(100% - 24px)); max-height: 90dvh; padding: 16px; border: 1px solid var(--hairline); border-radius: var(--radius); background: var(--surface); color: var(--ink); }
+.barcode-dialog { width: min(440px, calc(100% - 24px)); max-height: min(90dvh, 100%); overflow: auto; padding: 16px; border: 1px solid var(--hairline); border-radius: var(--radius); background: var(--surface); color: var(--ink); }
+.install-hint p { font-size: 15px; line-height: 1.45; }
+.install-hint button { margin-top: 8px; }
 .barcode-dialog::backdrop { background: rgb(0 0 0 / 50%); }
 .barcode-dialog .actions { margin-top: 12px; }
 .barcode-preview { width: 100%; margin-top: 12px; background: #141414; border-radius: 12px; overflow: hidden; }

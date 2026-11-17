@@ -39,7 +39,7 @@
         <button type="button" data-photo>Leer desde foto</button>
         <button type="button" data-close autofocus>Cerrar</button>
       </div>
-      <input type="file" accept="image/*" capture="environment" hidden>
+      <input type="file" accept="image/*" hidden>
     `;
 
     const preview = dialog.querySelector('.barcode-preview');
@@ -141,5 +141,64 @@
     field.append(input, button);
   }
 
-  window.PorcentoBarcode = { addButton, load, createReader };
+  function choose(message, actions) {
+    return new Promise(resolve => {
+      const dialog = document.createElement('dialog');
+      dialog.className = 'barcode-dialog';
+      const text = document.createElement('p');
+      text.textContent = message;
+      const box = document.createElement('div');
+      box.className = 'actions';
+      let settled = false;
+      const finish = value => {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+        dialog.close();
+      };
+      for (const action of actions) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = action.label;
+        if (action.danger) button.className = 'quiet negative';
+        else if (action.primary) button.className = 'primary';
+        button.onclick = () => finish(action.id);
+        box.append(button);
+      }
+      dialog.append(text, box);
+      dialog.addEventListener('cancel', event => {
+        event.preventDefault();
+        finish(null);
+      });
+      dialog.addEventListener('close', () => dialog.remove(), { once: true });
+      document.body.append(dialog);
+      dialog.showModal();
+      (box.querySelector('.primary') || box.querySelector('button')).focus();
+    });
+  }
+
+  async function shareFile(filename, blob, title) {
+    const file = new File([blob], filename, { type: blob.type || 'text/plain' });
+    try {
+      if (navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ files: [file], title: title || filename });
+        return 'shared';
+      }
+    } catch (error) {
+      if (error?.name === 'AbortError') return 'cancelled';
+    }
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.append(link);
+    link.click();
+    setTimeout(() => {
+      link.remove();
+      URL.revokeObjectURL(url);
+    }, 1500);
+    return 'downloaded';
+  }
+
+  window.PorcentoBarcode = { addButton, load, createReader, choose, shareFile };
 })();

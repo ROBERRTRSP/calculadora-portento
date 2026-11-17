@@ -2,9 +2,15 @@
 <html lang="es">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
   <meta name="theme-color" content="#f2f2f7">
-  <link rel="stylesheet" href="./porcento.css?v=24">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Porcento">
+  <link rel="apple-touch-icon" href="./icon-180.png">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="stylesheet" href="./porcento.css?v=27">
   <title>Mi catálogo · Porcento</title>
   <style>
     #catalogEditor { margin-top: 10px; }
@@ -29,11 +35,14 @@
     <a class="back" href="./index.html">‹ Porcento</a>
     <header class="page-header"><h1>Mi catálogo</h1></header>
     <section class="card" aria-label="Gestionar productos">
-      <p class="caption">Los productos se guardan en este navegador.</p>
+      <p class="caption">Los productos se guardan en este navegador. Exporta una copia para guardarlos en Archivos.</p>
       <p id="catalogStatus" class="status" role="status"></p>
       <div class="actions field">
         <button id="newProduct" class="primary" type="button">Añadir producto</button>
         <a class="button" href="./scanner.html">Leer factura</a>
+        <button id="exportCatalog" type="button">Exportar copia</button>
+        <button id="importCatalog" type="button">Restaurar copia</button>
+        <input id="importCatalogFile" type="file" accept="application/json,.json" hidden>
       </div>
       <form id="catalogEditor" hidden aria-labelledby="editorTitle">
         <h2 id="editorTitle">Añadir producto</h2>
@@ -46,7 +55,7 @@
           <input id="productCode" inputmode="numeric" autocomplete="off">
         </div>
         <fieldset id="productPhotoField">
-          <legend>Foto del producto</legend>
+          <legend>Foto del producto <small>(opcional)</small></legend>
           <img id="productPhotoPreview" alt="Vista previa de la foto del producto" hidden>
           <div class="actions">
             <button id="takeProductPhoto" type="button">Tomar foto</button>
@@ -58,18 +67,18 @@
         </fieldset>
         <div class="fields field">
           <div class="field">
-            <label for="productCost">Precio total de compra ($)</label>
-            <input id="productCost" inputmode="decimal" placeholder="0.00" autocomplete="off" required>
+            <label for="productCost">Precio total de compra ($) <small>(opcional)</small></label>
+            <input id="productCost" inputmode="decimal" placeholder="0.00" autocomplete="off">
           </div>
           <div class="field">
-            <label for="productUnits">Unidades compradas</label>
-            <input id="productUnits" type="number" min="1" step="1" inputmode="numeric" placeholder="Ej. 25" required>
+            <label for="productUnits">Unidades compradas <small>(opcional)</small></label>
+            <input id="productUnits" type="number" min="1" step="1" inputmode="numeric" placeholder="Ej. 25">
           </div>
         </div>
         <p id="productUnitCost" class="status" aria-live="polite"></p>
         <div class="field">
-          <label for="productSale">Precio de venta por unidad ($)</label>
-          <input id="productSale" inputmode="decimal" placeholder="0.00" autocomplete="off" required>
+          <label for="productSale">Precio de venta por unidad ($) <small>(opcional)</small></label>
+          <input id="productSale" inputmode="decimal" placeholder="0.00" autocomplete="off">
         </div>
         <div class="actions">
           <button id="saveProduct" class="primary" type="submit">Guardar producto</button>
@@ -86,9 +95,9 @@
       <p id="catalogEmpty" class="status" role="status"></p>
     </section>
   </main>
-  <script src="./factura.js?v=20"></script>
-  <script src="./catalogo.js?v=25"></script>
-  <script src="./barcode.js?v=24"></script>
+  <script src="./factura.js?v=27"></script>
+  <script src="./catalogo.js?v=27"></script>
+  <script src="./barcode.js?v=27"></script>
   <script>
     const $ = id => document.getElementById(id);
     const catalog = window.PorcentoCatalogo;
@@ -169,7 +178,7 @@
       for (const url of thumbnailUrls) URL.revokeObjectURL(url);
       thumbnailUrls = [];
       const query = catalog.searchKey($('catalogSearch').value);
-      const matches = products.filter(product => catalog.searchKey(product.name).includes(query) || product.code.includes(query));
+      const matches = products.filter(product => catalog.searchKey(product.name).includes(query) || (product.code || '').includes(query));
       $('catalogEmpty').textContent = matches.length ? '' : query ? 'No se encontraron productos.' : 'Todavía no hay productos guardados.';
       $('catalogList').replaceChildren(...matches.map(product => {
         const row = document.createElement('li');
@@ -289,23 +298,30 @@
     editor.onsubmit = async event => {
       event.preventDefault();
       if (saving || $('saveProduct').disabled) return;
-      if (!productPhoto) {
-        $('photoStatus').textContent = 'Añade una foto para guardar el producto.';
-        $('takeProductPhoto').focus();
-        return;
-      }
+      const costBlank = $('productCost').value.trim() === '';
+      const unitsBlank = $('productUnits').value.trim() === '';
       const { cents, units } = purchaseValues();
       const sale = $('productSale').value.trim();
       const saleCents = invoice.moneyCents(sale);
-      if (cents === null || units === null || saleCents === null || saleCents < 0) {
-        $('editorStatus').textContent = cents === null ? 'Escribe el precio total de compra, con hasta dos decimales.' :
-          units === null ? 'Escribe una cantidad entera mayor que cero.' : 'Escribe el precio de venta por unidad, con hasta dos decimales.';
+      if (costBlank !== unitsBlank || (!costBlank && (cents === null || units === null))) {
+        $('editorStatus').textContent = !costBlank && cents === null ? 'Escribe el precio total de compra, con hasta dos decimales.' :
+          !unitsBlank && units === null ? 'Escribe una cantidad entera mayor que cero.' :
+          'Escribe el precio total de compra y las unidades, o deja los dos vacíos.';
         return;
       }
-      const input = { name: $('productName').value, code: $('productCode').value, cost: cents / 100 / units, sale, purchase: { cents, units }, photo: productPhoto };
+      if (sale && (saleCents === null || saleCents < 0)) {
+        $('editorStatus').textContent = 'Escribe el precio de venta por unidad, con hasta dos decimales.';
+        return;
+      }
+      const input = {
+        name: $('productName').value, code: $('productCode').value, photo: productPhoto,
+        cost: costBlank ? null : cents / 100 / units,
+        sale: sale ? sale : '',
+        purchase: costBlank ? null : { cents, units }
+      };
       lockEditor(true);
       try {
-        const result = await catalog.save(input, { previousKey: editing?.key, expected: editing?.updated });
+        const result = await catalog.save(input, { previousKey: editing?.key, expected: editing?.updated, preserveMissing: true });
         if (result.conflict || result.stale) {
           $('editorStatus').textContent = result.conflict ? 'Ya existe un producto con ese código o nombre. Abre el producto guardado para editarlo.' :
             'El producto cambió. Vuelve a abrirlo desde la lista.';
@@ -323,8 +339,53 @@
       closeEditor();
     };
 
+    $('exportCatalog').onclick = async () => {
+      const status = $('catalogStatus');
+      try {
+        const snapshot = await catalog.exportSnapshot();
+        if (!snapshot.products.length) {
+          status.textContent = 'Todavía no hay productos para exportar.';
+          return;
+        }
+        const blob = new Blob([JSON.stringify(snapshot)], { type: 'application/json' });
+        const outcome = await window.PorcentoBarcode.shareFile('porcento-catalogo.json', blob, 'Catálogo Porcento');
+        if (outcome === 'cancelled') return;
+        status.textContent = outcome === 'shared' ? 'Copia lista para guardar en Archivos.' : 'Copia descargada.';
+      } catch {
+        status.textContent = 'No se pudo exportar el catálogo.';
+      }
+    };
+    $('importCatalog').onclick = () => $('importCatalogFile').click();
+    $('importCatalogFile').onchange = async () => {
+      const input = $('importCatalogFile');
+      const file = input.files?.[0];
+      input.value = '';
+      if (!file) return;
+      const status = $('catalogStatus');
+      try {
+        const data = JSON.parse(await file.text());
+        const count = Array.isArray(data.products) ? data.products.length : 0;
+        const choice = await window.PorcentoBarcode.choose(
+          '¿Restaurar ' + count + (count === 1 ? ' producto' : ' productos') + '? Si ya existen, se actualizan.',
+          [{ id: 'restore', label: 'Restaurar', primary: true }, { id: 'cancel', label: 'Cancelar' }]
+        );
+        if (choice !== 'restore') return;
+        const { saved, failed } = await catalog.importSnapshot(data);
+        await loadProducts();
+        status.textContent = saved + (saved === 1 ? ' producto restaurado.' : ' productos restaurados.') +
+          (failed.length ? ' No se pudieron leer: ' + failed.length + '.' : '');
+      } catch (error) {
+        status.textContent = error instanceof SyntaxError ? 'Ese archivo no es una copia de Porcento.' : (error.message || 'No se pudo leer la copia.');
+      }
+    };
+
     $('deleteProduct').onclick = async () => {
-      if (!editing || !confirm('¿Eliminar «' + editing.name + '» del catálogo?')) return;
+      if (!editing) return;
+      const choice = await window.PorcentoBarcode.choose(
+        '¿Eliminar «' + editing.name + '» del catálogo?',
+        [{ id: 'keep', label: 'Conservar', primary: true }, { id: 'delete', label: 'Eliminar', danger: true }]
+      );
+      if (choice !== 'delete') return;
       lockEditor(true);
       try {
         const deleted = await catalog.remove(editing);
@@ -347,6 +408,7 @@
       $('productCost').value = draft.get('compra') ?? '';
       $('productUnits').value = draft.get('unidades') ?? '';
       $('productSale').value = draft.get('venta') ?? '';
+      $('productName').value = draft.get('nombre') ?? '';
       showUnitCost();
     }
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});

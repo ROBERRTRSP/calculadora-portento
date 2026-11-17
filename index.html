@@ -2,12 +2,15 @@
 <html lang="es">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
   <meta name="theme-color" content="#f2f2f7">
+  <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Porcento">
+  <link rel="apple-touch-icon" href="./icon-180.png">
   <link rel="manifest" href="./manifest.webmanifest">
-  <link rel="stylesheet" href="./porcento.css">
+  <link rel="stylesheet" href="./porcento.css?v=27">
   <title>Porcento</title>
   <style>
     .calculator-header { min-height: 44px; margin-bottom: 6px; }
@@ -27,6 +30,7 @@
     .markup-price { margin-top: 8px; padding-top: 7px; border-top: 1px solid var(--hairline); }
     .sale-results { border-top: 1px solid var(--hairline); margin-top: 8px; padding-top: 7px; }
     .sale-results strong { display: block; }
+    #calculator > .fields, #calculator > .fields + .field { margin-top: 9px; }
     .tools { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
     .tools a { min-width: 0; background: var(--surface); border: 1px solid var(--hairline); }
     @media (max-width: 350px) { .tools a { gap: 4px; padding-inline: 6px; font-size: 13px; } }
@@ -37,7 +41,7 @@
     <header class="page-header calculator-header">
       <h1>Porcento</h1>
       <div class="calculator-actions">
-        <a class="button scan-product" href="./comparador.html?escanear=1#scan" aria-label="Escanear producto">
+        <a class="button scan-product" href="./comparador.html#scan" aria-label="Escanear producto">
           <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7V4h4m10 0h4v3M3 17v3h4m10 0h4v-3M7 8v8m3-8v8m4-8v8m3-8v8"/></svg>
           Escanear
         </a>
@@ -45,13 +49,22 @@
       </div>
     </header>
 
+    <div class="card install-hint" id="installHint" hidden>
+      <p>En el iPhone, pulsa Compartir y elige Añadir a pantalla de inicio. Así la cámara queda en la app y el catálogo no se borra a los pocos días.</p>
+      <button class="quiet" id="dismissInstall" type="button">Entendido</button>
+    </div>
+
     <form class="card" id="calculator">
+      <div class="field">
+        <label for="itemName">Producto <small>(opcional)</small></label>
+        <input id="itemName" maxlength="180" placeholder="Nombre para el catálogo" autocomplete="off" enterkeyhint="next">
+      </div>
       <div class="fields">
         <div class="field">
           <label for="cost">Costo de compra</label>
           <div class="money-input">
             <span aria-hidden="true">$</span>
-            <input id="cost" type="number" inputmode="decimal" min="0" step=".01" placeholder="0.00" autocomplete="off" enterkeyhint="next">
+            <input id="cost" type="text" inputmode="decimal" placeholder="0.00" autocomplete="off" enterkeyhint="next">
           </div>
         </div>
         <div class="field">
@@ -63,7 +76,7 @@
         <label for="sale">Tu precio por unidad <small>(opcional)</small></label>
         <div class="money-input">
           <span aria-hidden="true">$</span>
-          <input id="sale" type="number" inputmode="decimal" min="0" step=".01" placeholder="0.00" autocomplete="off" enterkeyhint="done">
+            <input id="sale" type="text" inputmode="decimal" placeholder="0.00" autocomplete="off" enterkeyhint="done">
         </div>
       </div>
       <p class="status" id="inputStatus" role="status"></p>
@@ -95,10 +108,6 @@
     </section>
 
     <nav class="tools" aria-label="Herramientas">
-      <a class="button" href="./comparador.html">
-        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7V4h4m10 0h4v3M3 17v3h4m10 0h4v-3M7 8v8m3-8v8m4-8v8m3-8v8"/></svg>
-        Escanear producto
-      </a>
       <a class="button" href="./scanner.html">
         <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2V3Zm3 5h6m-6 4h6"/></svg>
         Leer factura
@@ -110,7 +119,7 @@
     </nav>
   </main>
 
-  <script src="./factura.js?v=15"></script>
+  <script src="./factura.js?v=27"></script>
   <script>
     const $ = id => document.getElementById(id);
     const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
@@ -125,28 +134,31 @@
     }
 
     function calculate() {
+      const invoice = window.PorcentoFactura;
       const units = quantity.value === '' ? 1 : quantity.valueAsNumber;
       const validUnits = !quantity.validity.badInput && Number.isInteger(units) && units > 0;
-      const purchase = cost.valueAsNumber;
-      const unit = purchase / units;
-      const validCost = Number.isFinite(unit) && purchase >= 0 && validUnits;
+      const costText = cost.value.trim();
+      const purchaseCents = costText === '' ? null : invoice.moneyCents(costText);
+      const validCost = purchaseCents !== null && purchaseCents >= 0 && validUnits;
+      const unit = validCost ? purchaseCents / 100 / units : NaN;
       $('saveCalculation').disabled = !validCost;
       $('inputStatus').textContent = !validUnits ? 'Escribe una cantidad entera mayor que cero.'
-        : purchase < 0 ? 'El costo debe ser de $0 o más.' : '';
+        : costText !== '' && purchaseCents === null ? 'Escribe un costo de $0 o más, con hasta dos decimales.' : '';
       $('unit').textContent = validCost ? money.format(unit) : '—';
-      const markupPrice = validCost ? window.PorcentoFactura.priceWithMarkup(purchase, units) : null;
+      const markupPrice = validCost ? invoice.priceWithMarkup(costText, units) : null;
       $('markupPrice').textContent = markupPrice === null ? '—' : money.format(markupPrice);
 
       margins.forEach((margin, index) => {
         const [, amount, profit] = suggestions[index].children;
-        const price = Math.ceil((unit / (1 - margin / 100) - 1e-10) * 100) / 100;
-        amount.textContent = validCost ? money.format(price) : '—';
-        profit.hidden = !validCost;
-        profit.textContent = validCost ? money.format(price - unit) + ' ganancia' : '';
+        const price = !validCost ? null : unit === 0 ? 0 : invoice.suggestedPrice(costText, units, margin);
+        amount.textContent = price === null ? '—' : money.format(price);
+        profit.hidden = price === null;
+        profit.textContent = price === null ? '' : money.format(price - unit) + ' ganancia';
       });
 
-      const price = sale.valueAsNumber;
-      $('custom').hidden = !(validCost && price > 0);
+      const saleCents = sale.value.trim() === '' ? null : invoice.moneyCents(sale.value);
+      const price = saleCents === null ? NaN : saleCents / 100;
+      $('custom').hidden = !(validCost && saleCents > 0);
       if (!$('custom').hidden) {
         const profit = price - unit;
         showAmount('saleMargin', (profit / price * 100).toFixed(1) + '%', profit < 0);
@@ -159,12 +171,14 @@
     form.addEventListener('submit', event => event.preventDefault());
     $('saveCalculation').onclick = () => {
       const units = quantity.value === '' ? 1 : quantity.valueAsNumber;
-      const unitCost = cost.valueAsNumber / units;
-      if (!Number.isFinite(unitCost) || unitCost < 0 || !Number.isInteger(units) || units < 1) return;
-      const draft = new URLSearchParams({ compra: cost.value, unidades: String(units), venta: sale.value });
+      const purchaseCents = window.PorcentoFactura.moneyCents(cost.value);
+      if (purchaseCents === null || purchaseCents < 0 || !Number.isInteger(units) || units < 1) return;
+      const draft = new URLSearchParams({ compra: (purchaseCents / 100).toFixed(2), unidades: String(units), venta: sale.value.trim() });
+      const name = $('itemName').value.trim();
+      if (name) draft.set('nombre', name);
       location.href = './catalogo.html#' + draft;
     };
-    for (const [current, next] of [[cost, quantity], [quantity, sale], [sale, null]]) {
+    for (const [current, next] of [[$('itemName'), cost], [cost, quantity], [quantity, sale], [sale, null]]) {
       current.addEventListener('keydown', event => {
         if (event.key !== 'Enter') return;
         event.preventDefault();
@@ -177,6 +191,16 @@
       calculate();
     });
     calculate();
+    const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    const standalone = navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
+    const hint = $('installHint');
+    try {
+      if (ios && !standalone && localStorage.getItem('porcento-install-hint') !== '1') hint.hidden = false;
+    } catch { /* La navegación privada puede bloquear el almacenamiento. */ }
+    $('dismissInstall').onclick = () => {
+      hint.hidden = true;
+      try { localStorage.setItem('porcento-install-hint', '1'); } catch { /* La nota sigue oculta en esta visita. */ }
+    };
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(() => {}));
     }

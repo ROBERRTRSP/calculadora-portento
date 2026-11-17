@@ -2,10 +2,15 @@
 <html lang="es">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
   <meta name="theme-color" content="#f2f2f7">
+  <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <link rel="stylesheet" href="./porcento.css">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Porcento">
+  <link rel="apple-touch-icon" href="./icon-180.png">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="stylesheet" href="./porcento.css?v=27">
   <title>Escanear producto · Porcento</title>
   <style>
     .scan-actions { margin-bottom: 9px; }
@@ -28,7 +33,7 @@
         <button id="photoButton" type="button">Leer desde foto</button>
         <button id="stop" type="button" hidden>Cerrar cámara</button>
       </div>
-      <input id="photo" type="file" accept="image/*" capture="environment" hidden>
+      <input id="photo" type="file" accept="image/*" hidden>
       <video id="video" playsinline muted hidden></video>
       <div id="qr-reader" hidden></div>
       <div class="actions">
@@ -51,7 +56,7 @@
         <div class="fields">
           <div class="field">
             <label for="cost">Costo de compra ($)</label>
-            <input id="cost" type="number" min="0" step=".01" inputmode="decimal" placeholder="0.00">
+            <input id="cost" type="text" inputmode="decimal" placeholder="0.00" autocomplete="off">
           </div>
           <div class="field">
             <label for="qty">Unidades <small>(opcional)</small></label>
@@ -60,7 +65,7 @@
         </div>
         <div class="field">
           <label for="sale">Tu precio por unidad ($)</label>
-          <input id="sale" type="number" min="0" step=".01" inputmode="decimal" placeholder="0.00">
+          <input id="sale" type="text" inputmode="decimal" placeholder="0.00" autocomplete="off">
         </div>
         <div id="results"></div>
         <div class="actions manual-actions">
@@ -73,24 +78,57 @@
     </details>
 
   </main>
-  <script src="./factura.js?v=20"></script>
-  <script src="./catalogo.js?v=25"></script>
-  <script src="./barcode.js?v=24"></script>
+  <script src="./factura.js?v=27"></script>
+  <script src="./catalogo.js?v=27"></script>
+  <script src="./barcode.js?v=27"></script>
   <script>
 const $ = id => document.getElementById(id);
 const usd = n => '$' + n.toFixed(2);
 let stream = null, detector = null, raf = 0, html5scanner = null, scanning = false;
 function calc() {
-const purchase=Number($('cost').value),qty=Number($('qty').value),sale=Number($('sale').value),hasCost=$('cost').value!==''&&purchase>0,hasSale=$('sale').value!==''&&sale>0,unit=hasCost?(qty>0?purchase/qty:purchase):0;
-let h=hasCost?'<div class="row"><span>Costo por unidad</span><b>'+usd(unit)+'</b></div>'+[33,45,50].map(m=>'<div class="row"><span>Margen '+m+'%</span><b class="value">'+usd(Math.ceil(unit/(1-m/100)*100)/100)+'</b></div>').join(''):'';
-if(hasSale){h+='<div class="row"><span>Tu precio</span><b>'+usd(sale)+'</b></div>';if(hasCost)h+='<div class="row"><span>Ganancia bruta/unidad</span><b>'+usd(sale-unit)+'</b></div><div class="row"><span>Margen bruto</span><b>'+((sale-unit)/sale*100).toFixed(1)+'%</b></div>'}
-$('results').innerHTML=h;
+  const costText = $('cost').value.trim();
+  const qtyText = $('qty').value.trim();
+  const saleText = $('sale').value.trim();
+  const units = qtyText === '' ? 1 : Number(qtyText);
+  const validUnits = Number.isSafeInteger(units) && units > 0;
+  const cents = costText === '' ? null : invoice.moneyCents(costText);
+  const validCost = cents !== null && cents >= 0 && validUnits;
+  const unit = validCost ? cents / 100 / units : null;
+  const saleCents = saleText === '' ? null : invoice.moneyCents(saleText);
+  const results = $('results');
+  results.replaceChildren();
+  const add = (label, value) => {
+    const row = document.createElement('div');
+    row.className = 'row';
+    const name = document.createElement('span');
+    name.textContent = label;
+    const amount = document.createElement('b');
+    amount.textContent = value;
+    row.append(name, amount);
+    results.append(row);
+  };
+  if (validCost) {
+    add('Costo por unidad', usd(unit));
+    for (const margin of [33, 45, 50]) {
+      const price = unit === 0 ? 0 : invoice.suggestedPrice(costText, units, margin);
+      if (price !== null) add('Margen ' + margin + '%', usd(price));
+    }
+    const markup = invoice.priceWithMarkup(costText, units);
+    if (markup !== null) add('Precio con costo +50%', usd(markup));
+  }
+  if (saleCents !== null && saleCents > 0) {
+    const sale = saleCents / 100;
+    add('Tu precio', usd(sale));
+    if (validCost) {
+      add('Ganancia bruta/unidad', usd(sale - unit));
+      add('Margen bruto', ((sale - unit) / sale * 100).toFixed(1) + '%');
+    }
+  }
 }
 
 function restore(code, retainDraft = false) {
   currentCode = code;
   catalogRead = false;
-  recoveredUnitCost = null;
   $('status').textContent = '';
   $('catalogStatus').textContent = '';
   let saved;
@@ -103,7 +141,6 @@ function restore(code, retainDraft = false) {
 
 let currentCode = '';
 let catalogRead = false;
-let recoveredUnitCost = null;
 let lookupRequest = 0;
 const readCode = () => $('upc').value.replace(/[\s-]/g, '');
 const catalog = window.PorcentoCatalogo;
@@ -121,33 +158,37 @@ $('saveCatalog').onclick = async () => {
     return;
   }
   const code = readCode();
-  const costText = $('cost').value;
-  const hasQuantity = $('qty').value !== '';
+  const costText = $('cost').value.trim();
+  const hasQuantity = $('qty').value.trim() !== '';
   const quantity = hasQuantity ? Number($('qty').value) : 1;
-  const keepUnitCost = recoveredUnitCost?.code === code && recoveredUnitCost.value === costText && !hasQuantity;
-  const cents = costText === '' || keepUnitCost ? null : invoice.moneyCents(costText);
-  if ($('cost').validity?.badInput || (!keepUnitCost && costText !== '' && (cents === null || cents < 0))) {
+  const cents = costText === '' ? null : invoice.moneyCents(costText);
+  if (costText !== '' && (cents === null || cents < 0)) {
     status.textContent = 'Escribe un costo de compra válido, con hasta dos decimales.';
     return;
   }
-  if ($('qty').validity?.badInput || !Number.isSafeInteger(quantity) || quantity < 1) {
+  if ($('qty').validity?.badInput || (hasQuantity && (!Number.isSafeInteger(quantity) || quantity < 1))) {
     status.textContent = 'Escribe una cantidad entera mayor que cero.';
     return;
   }
-  if ($('sale').validity?.badInput) {
+  const saleText = $('sale').value.trim();
+  if (saleText && invoice.moneyCents(saleText) === null) {
     status.textContent = 'Escribe un precio de venta válido.';
     return;
   }
   const input = {
     name, code, cost: cents === null ? null : invoice.unitCost(costText, quantity),
-    sale: $('sale').value,
+    sale: saleText,
     purchase: cents === null ? null : { cents, units: hasQuantity ? quantity : null }
   };
   $('saveCatalog').disabled = true;
   try {
     let result = await catalog.save(input, { preserveMissing: true });
     if (result.conflict) {
-      if (!confirm('«' + result.conflict.name + '» ya está en Mi catálogo. ¿Actualizarlo con estos datos?')) {
+      const choice = await window.PorcentoBarcode.choose(
+        '«' + result.conflict.name + '» ya está en Mi catálogo. ¿Actualizarlo con estos datos?',
+        [{ id: 'update', label: 'Actualizar', primary: true }, { id: 'keep', label: 'Conservar' }]
+      );
+      if (choice !== 'update') {
         status.textContent = 'Se conservó la ficha guardada.';
         return;
       }
@@ -195,12 +236,12 @@ $('lookup').onclick = async () => {
   catalogRead = true;
   if (saved) {
     const purchase = saved.purchase;
-    const values = [saved.name, purchase ? (purchase.cents / 100).toFixed(2) : saved.cost, purchase?.units, saved.sale === null ? '' : (saved.sale / 100).toFixed(2)];
+    const values = [saved.name, purchase ? (purchase.cents / 100).toFixed(2) : '', purchase?.units ?? '', saved.sale === null ? '' : (saved.sale / 100).toFixed(2)];
     productFields.forEach((id, i) => {
       if ($(id).value === before[i]) $(id).value = values[i] ?? '';
     });
-    recoveredUnitCost = !purchase && saved.cost !== null ? { code, value: String(saved.cost) } : null;
-    $('catalogStatus').textContent = 'Cargado de Mi catálogo.';
+    const unitNote = !purchase && saved.cost !== null ? ' Costo por unidad guardado: ' + usd(saved.cost) + '.' : '';
+    $('catalogStatus').textContent = 'Cargado de Mi catálogo.' + unitNote;
     $('costDetails').open = true;
     calc();
   }
@@ -218,9 +259,7 @@ $('scan').onclick=async()=>{if(!navigator.mediaDevices?.getUserMedia){$('status'
 $('photoButton').onclick=()=>$('photo').click();
 $('photo').onchange=async()=>{let file=$('photo').files?.[0];if(!file)return;await stop();scanning=true;$('status').textContent='Leyendo el código de la foto…';try{await window.PorcentoBarcode.load();$('qr-reader').hidden=false;html5scanner=window.PorcentoBarcode.createReader('qr-reader');let code=await html5scanner.scanFile(file,true);foundCode(code);if(scanning){await stop();$('status').textContent='No se encontró un código UPC/EAN en la foto.'}}catch(e){await stop();$('status').textContent='No pude leer la foto. Tómala de cerca, recta y sin reflejos.'}finally{$('photo').value=''}};
 $('stop').onclick=stop;window.addEventListener('pagehide',stop);calc();
-if (new URLSearchParams(location.search).get('escanear') === '1') {
-  $('scan').click();
-}
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
   </script>
 </body>
 </html>

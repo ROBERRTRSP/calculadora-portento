@@ -1,1 +1,17 @@
-const CACHE='porcento-v26';const ASSETS=['./','./index.html','./scanner.html','./catalogo.html','./catalogo.js?v=25','./comparador.html','./manifest.webmanifest','./porcento.css','./porcento.css?v=24','./barcode.js?v=24','./factura.js','./factura.js?v=15','./factura.js?v=20'];self.addEventListener('install',e=>e.waitUntil(caches.open(CACHE).then(c=>c.addAll(ASSETS)).then(()=>self.skipWaiting())));self.addEventListener('activate',e=>e.waitUntil(Promise.all([self.clients.claim(),caches.keys().then(keys=>Promise.all(keys.filter(k=>k.startsWith('porcento-')&&k!==CACHE).map(k=>caches.delete(k))))])));self.addEventListener('fetch',e=>{if(e.request.method==='GET'&&new URL(e.request.url).origin===location.origin)e.respondWith(fetch(e.request).then(r=>{if(r.ok){let copy=r.clone();caches.open(CACHE).then(c=>c.put(e.request,copy))}return r}).catch(async()=>await caches.match(e.request)||Response.error()))});
+const CACHE = 'porcento-v27';
+const ASSETS = ['./', './index.html', './scanner.html', './catalogo.html', './comparador.html', './manifest.webmanifest', './porcento.css?v=27', './factura.js?v=27', './catalogo.js?v=27', './barcode.js?v=27', './icon-180.png', './icon-512.png'];
+self.addEventListener('install', event => event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS)).then(() => self.skipWaiting())));
+self.addEventListener('activate', event => event.waitUntil(Promise.all([
+  self.clients.claim(),
+  caches.keys().then(keys => Promise.all(keys.filter(key => key.startsWith('porcento-') && key !== CACHE).map(key => caches.delete(key))))
+])));
+self.addEventListener('fetch', event => {
+  if (event.request.method !== 'GET' || new URL(event.request.url).origin !== location.origin) return;
+  event.respondWith(fetch(event.request).then(response => {
+    if (response.ok) {
+      const copy = response.clone();
+      caches.open(CACHE).then(cache => cache.put(event.request, copy));
+    }
+    return response;
+  }).catch(async () => await caches.match(event.request) || Response.error()));
+});
