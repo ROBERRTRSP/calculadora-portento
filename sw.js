@@ -1,4 +1,4 @@
-const CACHE = 'porcento-v33';
+const CACHE = 'porcento-v34';
 const ASSETS = [
   './', './index.html', './scanner.html', './catalogo.html', './comparador.html',
   './manifest.webmanifest', './porcento.css', './porcento.css?v=24',

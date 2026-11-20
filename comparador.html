@@ -13,6 +13,11 @@
     #lookup { align-self: end; }
     #name { margin-top: 2px; }
     .product-name { margin-top: 9px; }
+    .web-result { display: flex; align-items: start; gap: 12px; margin-top: 12px; }
+    .web-result img { flex: none; border-radius: 9px; background: var(--field); object-fit: contain; }
+    .web-result div { min-width: 0; overflow-wrap: anywhere; }
+    .web-result .caption { margin-top: 3px; }
+    .web-lookup a { display: inline-flex; align-items: center; min-height: 44px; }
     #results { margin-top: 4px; font-size: 14px; }
     .manual-actions { margin-top: 12px; }
   </style>
@@ -43,6 +48,20 @@
       <p class="status" id="status" role="status"></p>
       <img id="savedPhoto" alt="Foto del producto" width="88" height="88" style="object-fit:contain" hidden>
       <a class="button" id="openSaved" href="./catalogo.html" hidden>Ver ficha en Mi catálogo</a>
+    </section>
+
+    <section class="card web-lookup" id="webLookup" aria-labelledby="webHeading" hidden>
+      <h2 id="webHeading">Información en la web</h2>
+      <p class="status" id="webStatus" role="status"></p>
+      <div class="web-result" id="webResult" hidden>
+        <img id="webPhoto" alt="Foto del producto en la web" width="76" height="76" referrerpolicy="no-referrer" hidden>
+        <div>
+          <h3 id="webName"></h3>
+          <p class="caption" id="webDetails"></p>
+          <a id="webSource" target="_blank" rel="noopener noreferrer"></a>
+        </div>
+      </div>
+      <a id="webSearch" target="_blank" rel="noopener noreferrer" hidden>Buscar este código en Google</a>
     </section>
 
     <details class="card" id="costDetails" open>
@@ -146,10 +165,21 @@ function showSaved(product) {
 }
 let recoveredUnitCost = null;
 let lookupRequest = 0;
+let webRequest;
+let webFilledName;
 const readCode = () => $('upc').value.replace(/[\s-]/g, '');
 const catalog = window.PorcentoCatalogo;
 const invoice = window.PorcentoFactura;
 const productFields = ['name', 'cost', 'qty', 'sale'];
+const webSources = {
+  food: ['Open Food Facts', 'openfoodfacts.org'],
+  beauty: ['Open Beauty Facts', 'openbeautyfacts.org'],
+  petfood: ['Open Pet Food Facts', 'openpetfoodfacts.org'],
+  product: ['Open Products Facts', 'openproductsfacts.org']
+};
+let nameRevision = 0;
+$('name').addEventListener('input', () => { nameRevision++; webFilledName = null; });
+$('webPhoto').addEventListener('error', () => { $('webPhoto').hidden = true; });
 for (const id of ['cost','qty','sale']) $(id).addEventListener('input', () => {
   if (id !== 'sale') purchaseEdited = true;
   calc();
@@ -222,6 +252,7 @@ $('clear').onclick = () => {
   for (const id of ['upc',...productFields]) $(id).value = '';
   clearTimeout(lookupDelay);
   lookupRequest++;
+  clearWebLookup('');
   restore('');
 };
 let lookupDelay;
@@ -229,6 +260,7 @@ $('upc').addEventListener('input', () => {
   clearTimeout(lookupDelay);
   lookupRequest++;
   const code = readCode();
+  clearWebLookup(code);
   if (catalog.barcodeKey(code) !== catalog.barcodeKey(currentCode)) {
     if (savedProduct) restore('');
     $('status').textContent = '';
@@ -240,9 +272,106 @@ $('upc').addEventListener('keydown', event => {
   if (event.key === 'Enter') lookupProduct();
 });
 $('lookup').onclick = () => lookupProduct();
+function clearWebLookup(code) {
+  webRequest?.abort();
+  $('webLookup').hidden = true;
+  $('webResult').hidden = true;
+  $('webSearch').hidden = true;
+  $('webPhoto').hidden = true;
+  $('webPhoto').removeAttribute('src');
+  $('webStatus').textContent = '';
+  if (webFilledName && catalog.barcodeKey(webFilledName.code) !== catalog.barcodeKey(code)) {
+    if ($('name').value === webFilledName.name) $('name').value = '';
+    webFilledName = null;
+  }
+}
+
+async function findWebProduct(code, controller) {
+  const url = new URL('https://world.openfoodfacts.org/api/v3/product/' + code + '.json');
+  url.searchParams.set('product_type', 'all');
+  url.searchParams.set('fields', 'code,product_name,product_name_es,product_name_en,brands,quantity,image_front_url,image_url,product_type');
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      credentials: 'omit',
+      referrerPolicy: 'no-referrer',
+      headers: { 'X-User-Agent': 'Porcento/1.0 (https://roberrtrsp.github.io/calculadora-portento/)' }
+    });
+    if (response.status === 404) return null;
+    if (!response.ok) throw new Error('Product lookup failed');
+    const data = await response.json();
+    if (data.result?.id === 'product_not_found') return null;
+    const product = data.product;
+    const returnedCode = String(product?.code ?? data.code ?? '');
+    // A product may be returned as EAN-13 for the equivalent UPC-A.
+    const sameCode = /^\d{8,14}$/.test(returnedCode) &&
+      (returnedCode === code || (code.length >= 12 && returnedCode.length >= 12 &&
+        catalog.barcodeKey(returnedCode) === catalog.barcodeKey(code)));
+    if (!sameCode) return null;
+    const clean = value => typeof value === 'string' ? value.trim() : '';
+    const name = clean(product?.product_name_es) || clean(product?.product_name) || clean(product?.product_name_en);
+    const details = [clean(product?.brands), clean(product?.quantity)].filter(Boolean).join(' · ');
+    const source = Object.hasOwn(webSources, product?.product_type) ? webSources[product.product_type] : webSources.food;
+    const [sourceName, domain] = source;
+    let photo = '';
+    try {
+      const image = new URL(clean(product?.image_front_url) || clean(product?.image_url));
+      const trustedHosts = ['images.openfoodfacts.org', 'images.' + domain];
+      if (image.protocol === 'https:' && trustedHosts.includes(image.host)) photo = image.href;
+    } catch {}
+    return name || details || photo ? {
+      name, details, photo, sourceName,
+      sourceUrl: 'https://world.' + domain + '/product/' + returnedCode
+    } : null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function lookupWeb(code, isCurrent) {
+  const controller = new AbortController();
+  webRequest = controller;
+  $('webLookup').hidden = false;
+  $('webStatus').textContent = 'Buscando información del producto…';
+  $('webSearch').href = 'https://www.google.com/search?q=' + encodeURIComponent('"' + code + '"');
+  let product;
+  try {
+    product = await findWebProduct(code, controller);
+  } catch {
+    if (isCurrent()) {
+      $('webStatus').textContent = 'No pude consultar la web. Puedes volver a buscar.';
+      $('webSearch').hidden = false;
+    }
+    return;
+  } finally {
+    if (webRequest === controller) webRequest = null;
+  }
+  if (!isCurrent()) return;
+  if (!product) {
+    $('webStatus').textContent = 'Sin ficha disponible para este código.';
+    $('webSearch').hidden = false;
+    return;
+  }
+  $('webStatus').textContent = '';
+  $('webName').textContent = product.name;
+  $('webName').hidden = !product.name;
+  $('webDetails').textContent = product.details;
+  $('webDetails').hidden = !product.details;
+  $('webSource').textContent = product.sourceName;
+  $('webSource').href = product.sourceUrl;
+  if (product.photo) {
+    $('webPhoto').src = product.photo;
+    $('webPhoto').hidden = false;
+  }
+  $('webResult').hidden = false;
+  return product;
+}
+
 async function lookupProduct(automatic = false) {
   clearTimeout(lookupDelay);
   const code = readCode();
+  clearWebLookup(code);
   if (!/^\d{8,14}$/.test(code)) {
     $('status').textContent = 'Introduce un código UPC/EAN de 8 a 14 dígitos.';
     return;
@@ -253,6 +382,19 @@ async function lookupProduct(automatic = false) {
   if (!automatic && currentCode !== code && catalog.barcodeKey(currentCode) !== catalog.barcodeKey(code)) {
     restore(code, !currentCode);
   }
+  const revision = nameRevision;
+  const catalogLookup = lookupCatalog(code, automatic, isCurrent);
+  const webLookup = automatic && ![8, 12, 13, 14].includes(code.length)
+    ? undefined : lookupWeb(code, isCurrent);
+  await catalogLookup;
+  const web = await webLookup;
+  if (isCurrent() && web?.name && !savedProduct && revision === nameRevision && !$('name').value.trim()) {
+    $('name').value = web.name;
+    webFilledName = { code, name: web.name };
+  }
+}
+
+async function lookupCatalog(code, automatic, isCurrent) {
   const before = productFields.map(id => $(id).value);
   $('status').textContent = 'Buscando en Mi catálogo…';
   let saved;
@@ -269,6 +411,7 @@ async function lookupProduct(automatic = false) {
     $('status').textContent = 'Este código todavía no está en Mi catálogo.';
     return;
   }
+  webFilledName = null;
   const sameProduct = savedProduct?.key === saved.key;
   if (!sameProduct) purchaseEdited = false;
   currentCode = code;
@@ -296,28 +439,31 @@ $('photo').onchange = async () => {
   $('photo').value = '';
   $('scan').disabled = $('photoButton').disabled = true;
   $('status').textContent = 'Leyendo el código de la foto…';
+  clearWebLookup(readCode());
   const request = ++lookupRequest;
   clearTimeout(lookupDelay);
   let reader;
+  let code;
   try {
     await barcode.load();
     $('qr-reader').hidden = false;
     reader = barcode.createReader('qr-reader');
-    const code = await reader.scanFile(file, false);
+    code = await reader.scanFile(file, false);
     if (request !== lookupRequest) return;
     if (!/^\d{8,14}$/.test(code)) {
       $('status').textContent = 'La foto no muestra un código UPC o EAN legible.';
       return;
     }
-    $('upc').value = code;
-    await lookupProduct();
   } catch {
     if (request === lookupRequest) $('status').textContent = 'No pude leer la foto. Tómala de cerca, recta y sin reflejos.';
+    return;
   } finally {
     try { reader?.clear(); } catch { /* It may already be cleared. */ }
     $('qr-reader').hidden = true;
     $('scan').disabled = $('photoButton').disabled = false;
   }
+  $('upc').value = code;
+  await lookupProduct();
 };
 calc();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
